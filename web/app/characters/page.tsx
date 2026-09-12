@@ -215,8 +215,8 @@ export default function CharactersPage() {
 
   return (
     <div className="chars-shell">
-      <Link href="/" className="chars-back">
-        &larr; back to the roundtable
+      <Link href="/table" className="chars-back">
+        &larr; back to the table
       </Link>
 
       <header className="masthead">

@@ -23,6 +23,7 @@ export default function RootLayout({
             app/page.tsx and is owned by another workstream. */}
         <nav className="site-nav" aria-label="Site">
           <Link href="/">The Roundtable</Link>
+          <Link href="/table">The Table</Link>
           <Link href="/characters">Characters</Link>
         </nav>
         {children}

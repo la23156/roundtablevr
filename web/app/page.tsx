@@ -1,383 +1,175 @@
-"use client";
+// Roundtable — splash / landing page. The discussion app lives at /table.
 
-// Roundtable — an AI seminar table that discusses an uploaded investment deck.
+import Link from "next/link";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import PdfViewer, { ExtractedDoc } from "@/components/PdfViewer";
-import CardTable from "@/components/CardTable";
-import TranscriptLog from "@/components/TranscriptLog";
-import DirectedPanel, {
-  EMPTY_DIRECTION,
-  isDirectionValid,
-} from "@/components/DirectedPanel";
-import { DiscussionEngine, Insight } from "@/lib/engine";
-import { MicController } from "@/lib/mic";
-import { specFor } from "@/lib/characters";
-import { BUILT_IN_CHARACTERS, type CharacterDef } from "@/lib/characterTypes";
-import { MIN_SEATED } from "@/lib/rosterState";
-import { Direction, TranscriptEntry } from "@/lib/types";
-
-type DocPhase = "none" | "extracting" | "summarizing" | "ready";
-
-export default function Home() {
-  const [file, setFile] = useState<File | null>(null);
-  const [doc, setDoc] = useState<ExtractedDoc | null>(null);
-  const [docPhase, setDocPhase] = useState<DocPhase>("none");
-  const [summary, setSummary] = useState<string>("");
-  const [factsReady, setFactsReady] = useState(false);
-
-  const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
-  const [activeSpeaker, setActiveSpeaker] = useState<string | null>(null);
-  const [subtitle, setSubtitle] = useState<{
-    speakerId: string;
-    text: string;
-  } | null>(null);
-  const [insights, setInsights] = useState<Insight[]>([]);
-  const [running, setRunning] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // Card roster (workstream B): seated cast + full fetched roster.
-  const [seatedCast, setSeatedCast] = useState<CharacterDef[]>([]);
-  const [roster, setRoster] = useState<CharacterDef[]>(BUILT_IN_CHARACTERS);
-
-  // Directed mode (workstream C).
-  const [directedEnabled, setDirectedEnabled] = useState(false);
-  const [direction, setDirection] = useState<Direction>(EMPTY_DIRECTION);
-  const [covered, setCovered] = useState<number[]>([]);
-  const [checkIn, setCheckIn] = useState(false);
-
-  const [micOn, setMicOn] = useState(false);
-  const [micState, setMicState] = useState<
-    "idle" | "listening" | "speech" | "processing"
-  >("idle");
-  const [micLevel, setMicLevel] = useState(0);
-  const [interim, setInterim] = useState<string | null>(null);
-
-  const engineRef = useRef<DiscussionEngine | null>(null);
-  const micRef = useRef<MicController | null>(null);
-  const docRef = useRef<ExtractedDoc | null>(null);
-
-  // Engine singleton.
-  if (engineRef.current === null && typeof window !== "undefined") {
-    engineRef.current = new DiscussionEngine({
-      onTranscript: setTranscript,
-      onActiveSpeaker: setActiveSpeaker,
-      onSubtitle: setSubtitle,
-      onInsight: (insight) => setInsights((prev) => [...prev, insight]),
-      onError: setError,
-      onRunningChange: setRunning,
-      onCoveredPoints: setCovered,
-      onCheckIn: setCheckIn,
-    });
-  }
-
-  // The seated card set IS the session cast: castIds ride on every /api/turn
-  // request, and voice/name lookups resolve custom characters too.
-  const handleCastChange = useCallback(
-    (seated: CharacterDef[], all: CharacterDef[]) => {
-      setSeatedCast(seated);
-      setRoster(all);
-      engineRef.current?.setCast(seated);
-    },
-    []
-  );
-
-  // Keep the engine's direction in sync: a valid, enabled direction rides on
-  // every /api/turn request; otherwise the classic mode is untouched.
-  const directedValid = isDirectionValid(direction);
-  useEffect(() => {
-    engineRef.current?.setDirection(
-      directedEnabled && directedValid ? direction : null
-    );
-  }, [directedEnabled, directedValid, direction]);
-
-  const handleFile = useCallback((f: File | null) => {
-    if (!f) return;
-    engineRef.current?.stop();
-    setTranscript([]);
-    setInsights([]);
-    setSubtitle(null);
-    setSummary("");
-    setFactsReady(false);
-    setCovered([]);
-    setCheckIn(false);
-    setError(null);
-    setDoc(null);
-    docRef.current = null;
-    setFile(f);
-    setDocPhase("extracting");
-  }, []);
-
-  const handleExtracted = useCallback(async (extracted: ExtractedDoc) => {
-    setDoc(extracted);
-    docRef.current = extracted;
-    const engine = engineRef.current;
-    engine?.setPage({
-      number: 1,
-      total: extracted.pageCount,
-      text: extracted.pageTexts[0] ?? "",
-    });
-
-    setDocPhase("summarizing");
-    try {
-      const res = await fetch("/api/summarize", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: extracted.fullText }),
-      });
-      if (!res.ok) throw new Error("Summarize failed");
-      const { summary, entities } = (await res.json()) as {
-        summary: string;
-        entities: string[];
-      };
-      setSummary(summary);
-      if (engine) engine.summary = summary;
-      setDocPhase("ready");
-
-      // Fresh facts are a bonus, never a blocker.
-      try {
-        const factsRes = await fetch("/api/facts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ entities }),
-        });
-        const { factsBlock } = (await factsRes.json()) as {
-          factsBlock: string | null;
-        };
-        if (engine && factsBlock) {
-          engine.factsBlock = factsBlock;
-          setFactsReady(true);
-        }
-      } catch {
-        // ignore
-      }
-    } catch {
-      setError("Couldn't summarize the document — the discussion can still start.");
-      setDocPhase("ready");
-    }
-  }, []);
-
-  const handlePageChange = useCallback((pageNumber: number) => {
-    const extracted = docRef.current;
-    if (!extracted) return;
-    engineRef.current?.setPage({
-      number: pageNumber,
-      total: extracted.pageCount,
-      text: extracted.pageTexts[pageNumber - 1] ?? "",
-    });
-  }, []);
-
-  const toggleMic = useCallback(async () => {
-    if (micRef.current?.isActive) {
-      micRef.current.stop();
-      setMicOn(false);
-      return;
-    }
-    const mic = new MicController({
-      onLevel: setMicLevel,
-      onInterim: setInterim,
-      onFinal: (text) => engineRef.current?.interject(text),
-      onState: setMicState,
-    });
-    micRef.current = mic;
-    try {
-      await mic.start();
-      setMicOn(true);
-    } catch {
-      setError("Microphone access was denied.");
-      setMicOn(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      micRef.current?.stop();
-      engineRef.current?.stop();
-    };
-  }, []);
-
-  // Resolve speaker display info from the fetched roster (customs included),
-  // falling back to the static built-in specs.
-  const subtitleDef = subtitle
-    ? roster.find((c) => c.id === subtitle.speakerId)
-    : undefined;
-  const subtitleFallback = subtitle ? specFor(subtitle.speakerId) : undefined;
-  const subtitleTint = subtitleDef?.tintHex ?? subtitleFallback?.tint ?? null;
-  const subtitleName =
-    subtitleDef?.name ?? subtitleFallback?.name ?? subtitle?.speakerId ?? "";
-  const rosterReady = seatedCast.length >= MIN_SEATED;
-  const canStart =
-    docPhase === "ready" &&
-    !running &&
-    rosterReady &&
-    (!directedEnabled || directedValid);
-  const directedSessionStarted =
-    directedEnabled &&
-    transcript.some((entry) => entry.kind === "character");
-
+export default function Splash() {
   return (
-    <main className="shell">
-      <header className="masthead">
-        <h1>The Roundtable</h1>
-        <p className="tagline">
-          Five minds, one table, and the deck you brought with you.
+    <main className="splash">
+      {/* Hero */}
+      <section
+        className="splash-hero"
+        style={{ backgroundImage: "url(/splash/hero.jpg)" }}
+      >
+        <div className="splash-hero-veil">
+          <h1>The Roundtable</h1>
+          <p className="splash-tagline">
+            A seminar table of AI minds — in your room on Apple&nbsp;Vision&nbsp;Pro,
+            or right here in the browser.
+          </p>
+          <div className="splash-cta-row">
+            <Link href="/table" className="splash-cta primary">
+              Sit down at the table
+            </Link>
+            <Link href="/characters" className="splash-cta">
+              Create a character
+            </Link>
+          </div>
+        </div>
+      </section>
+
+      {/* What it is */}
+      <section className="splash-intro">
+        <p>
+          Roundtable seats you at a Harkness table in an antique classroom with
+          three to five AI characters who actually talk to each other — and to
+          you. Pick a question or hand them a document, listen in, and
+          interject out loud whenever you like. They hear you, answer you by
+          name, and carry on.
         </p>
-      </header>
+      </section>
 
-      <div className="columns">
-        <section className="pdf-pane">
-          <div className="pane-heading">
-            <h2>The Document</h2>
-            <label className="btn btn-upload">
-              {file ? "Replace PDF" : "Upload PDF"}
-              <input
-                type="file"
-                accept="application/pdf"
-                hidden
-                onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
-              />
-            </label>
+      {/* How it works */}
+      <section className="splash-steps">
+        <article className="splash-step">
+          <div className="splash-step-media">
+            <img
+              src="/splash/menu.jpg"
+              alt="The Vision Pro menu: tonight's question, the cast, and session settings"
+              loading="lazy"
+            />
           </div>
-          <PdfViewer
-            file={file}
-            onExtracted={handleExtracted}
-            onPageChange={handlePageChange}
-          />
-          {docPhase === "summarizing" && (
-            <div className="doc-status">Briefing the table on your document…</div>
-          )}
-          {docPhase === "ready" && summary && (
-            <div className="doc-status ok">
-              Briefing ready{factsReady ? " · fresh context gathered" : ""}.
-            </div>
-          )}
-        </section>
-
-        <section className="salon-pane">
-          <CardTable
-            activeSpeaker={activeSpeaker}
-            onCastChange={handleCastChange}
-          />
-
-          <div
-            className={`subtitle-area${checkIn ? " checkin-pulse" : ""}`}
-            style={
-              subtitleTint ? { borderColor: `${subtitleTint}66` } : undefined
-            }
-          >
-            {subtitle ? (
-              <>
-                <div
-                  className="subtitle-speaker"
-                  style={subtitleTint ? { color: subtitleTint } : undefined}
-                >
-                  {subtitleName}
-                </div>
-                <div className="subtitle-text">{subtitle.text}</div>
-              </>
-            ) : (
-              <div className="subtitle-idle">
-                {running ? "…" : "The floor is open."}
-              </div>
-            )}
-          </div>
-
-          <DirectedPanel
-            enabled={directedEnabled}
-            onEnabledChange={setDirectedEnabled}
-            direction={direction}
-            onDirectionChange={setDirection}
-            covered={covered}
-            running={running}
-            sessionStarted={directedSessionStarted}
-          />
-
-          <TranscriptLog
-            entries={transcript}
-            tintFor={(id) => roster.find((c) => c.id === id)?.tintHex}
-          />
-
-          {insights.length > 0 && (
-            <div className="insights">
-              {insights.slice(-3).map((ins, i) => (
-                <span key={i} className="insight-chip">
-                  ✦ {ins.title}
-                </span>
-              ))}
-            </div>
-          )}
-
-          {(interim || micState === "processing") && (
-            <div className="interim">
-              {interim ?? "Transcribing what you said…"}
-            </div>
-          )}
-
-          {error && <div className="error-banner">{error}</div>}
-
-          {checkIn && (
-            <div className="checkin-hint">
-              The table turns to <strong>YOU</strong> — press the mic and share
-              your read.
-            </div>
-          )}
-
-          <div className="controls">
-            {!running ? (
-              <button
-                className="btn btn-primary"
-                disabled={!canStart}
-                onClick={() => engineRef.current?.start()}
-              >
-                {transcript.length > 0 ? "Resume discussion" : "Start discussion"}
-              </button>
-            ) : (
-              <button
-                className="btn btn-secondary"
-                onClick={() => engineRef.current?.stop()}
-              >
-                Pause discussion
-              </button>
-            )}
-
-            <button
-              className={`btn btn-mic${micOn ? " live" : ""}`}
-              onClick={toggleMic}
-              title={
-                micOn
-                  ? "Stop listening"
-                  : "Listen for your voice — speak to join the table"
-              }
-            >
-              <span
-                className="mic-level"
-                style={{ transform: `scaleY(${0.15 + micLevel * 0.85})` }}
-              />
-              {micOn
-                ? micState === "speech"
-                  ? "Hearing you…"
-                  : micState === "processing"
-                    ? "Thinking…"
-                    : "Listening"
-                : "Join by voice"}
-            </button>
-          </div>
-
-          {docPhase === "ready" && !running && !rosterReady && (
-            <p className="hint">
-              Seat at least {MIN_SEATED} characters (the moderator is already
-              at the table) to start the discussion.
+          <div className="splash-step-text">
+            <span className="splash-step-num">I</span>
+            <h2>Pick a question, deal your cast</h2>
+            <p>
+              Choose tonight&rsquo;s question — or bring a PDF — then build the
+              table. Every character is a tarot-style card: drag the ones you
+              want onto the miniature table in the headset, or onto the felt
+              right here on the web. A professor, a skeptic, a dreamer, a
+              physicist, a historian… or anyone you&rsquo;ve invented.
             </p>
-          )}
+          </div>
+        </article>
 
-          {docPhase === "none" && (
-            <p className="hint">
-              Upload an investment deck, let the table read it, then start the
-              discussion. Turn pages any time — they&apos;ll notice.
+        <article className="splash-step reverse">
+          <div className="splash-step-media">
+            <img
+              src="/splash/session.jpg"
+              alt="Inside the immersive session: characters seated at the oak table, the topic chalked on the wall, live subtitles"
+              loading="lazy"
+            />
+          </div>
+          <div className="splash-step-text">
+            <span className="splash-step-num">II</span>
+            <h2>Take your seat</h2>
+            <p>
+              On Vision Pro the classroom surrounds you: lamplight, worn
+              bookshelves, your question chalked on the wall, and the cast
+              seated across the oak table — each with their own voice,
+              lip-synced face, and opinions. Look at someone and start talking;
+              they stop, listen, and answer. A green gem hovers over whoever
+              holds the floor, and the sharpest ideas fly to your gem rack as
+              collectible insights.
             </p>
-          )}
-        </section>
-      </div>
+          </div>
+        </article>
+
+        <article className="splash-step">
+          <div className="splash-step-media">
+            <img
+              src="/splash/deck.jpg"
+              alt="A live Vision Pro session: a deck page on the presentation board, page controls in hand, insight gems collected at the table edge"
+              loading="lazy"
+            />
+          </div>
+          <div className="splash-step-text">
+            <span className="splash-step-num">III</span>
+            <h2>Put a deck on the table</h2>
+            <p>
+              Upload a PDF — an investment deck, a paper, a proposal — and it
+              goes up on the presentation board. The table discusses the page
+              you&rsquo;re on as you flip, grounded in fresh context pulled
+              from the web. Directed mode adds structure: set a goal and key
+              points, and the moderator works through them, checks in with you
+              at each one, and steers the table back when it drifts.
+            </p>
+          </div>
+        </article>
+
+        <article className="splash-step reverse">
+          <div className="splash-step-media">
+            <img
+              src="/splash/cards.jpg"
+              alt="Ornate tarot-style character cards fanned on a felt table"
+              loading="lazy"
+            />
+          </div>
+          <div className="splash-step-text">
+            <span className="splash-step-num">IV</span>
+            <h2>Mint your own minds</h2>
+            <p>
+              On the <Link href="/characters">Characters</Link> page, describe
+              a personality — worldview, way of speaking, the hill they&rsquo;ll
+              die on — pick a voice, and an oil-painted portrait is generated
+              for their card. Your creations take a chair on the web and in the
+              headset alike.
+            </p>
+          </div>
+        </article>
+
+        <article className="splash-step">
+          <div className="splash-step-media phone">
+            <img
+              src="/splash/iphone.jpg"
+              alt="The iPhone companion app: join the table over FaceTime"
+              loading="lazy"
+            />
+          </div>
+          <div className="splash-step-text">
+            <span className="splash-step-num">V</span>
+            <h2>Bring real people</h2>
+            <p>
+              Start a FaceTime call and share the session. A friend on another
+              Vision Pro sits at the table as their Spatial Persona; iPhone
+              guests join through the companion app and appear as their chosen
+              character&rsquo;s card, glowing while they speak. Everyone can
+              interject, and the characters answer each of you by name.
+            </p>
+          </div>
+        </article>
+      </section>
+
+      {/* Closing CTA */}
+      <section className="splash-final">
+        <img
+          src="/splash/gem.jpg"
+          alt=""
+          aria-hidden="true"
+          className="splash-final-gem"
+          loading="lazy"
+        />
+        <h2>The seminar is in session.</h2>
+        <div className="splash-cta-row">
+          <Link href="/table" className="splash-cta primary">
+            Open the web roundtable
+          </Link>
+        </div>
+        <p className="splash-fine">
+          The web table runs in any modern browser. The full immersive
+          experience is a Vision&nbsp;Pro app; iPhone companions join live
+          sessions over FaceTime.
+        </p>
+      </section>
     </main>
   );
 }
