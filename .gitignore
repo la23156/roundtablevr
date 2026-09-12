@@ -1,0 +1,14 @@
+# Secrets — never commit
+env.txt
+roundtable/roundtable/Secrets.plist
+web/.env*
+
+# macOS / Xcode
+.DS_Store
+xcuserdata/
+*.xcuserstate
+
+# Web build artifacts
+web/node_modules/
+web/.next/
+web/.vercel/
