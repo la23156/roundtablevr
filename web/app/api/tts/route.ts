@@ -3,10 +3,15 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { CAST } from "@/lib/characters";
+import { CURATED_VOICES } from "@/lib/characterTypes";
 
 export const maxDuration = 30;
 
-const VALID_VOICES = new Set(CAST.map((c) => c.voiceID));
+// Cast voices + the curated audition list from the character creator.
+const VALID_VOICES = new Set([
+  ...CAST.map((c) => c.voiceID),
+  ...CURATED_VOICES.map((v) => v.id),
+]);
 
 export async function POST(request: NextRequest) {
   let text = "";

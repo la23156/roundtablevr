@@ -8,7 +8,7 @@
 
 import { chunksFor } from "./chunker";
 import { specFor } from "./characters";
-import { DirectorTurn, PageContext, TranscriptEntry } from "./types";
+import { Direction, DirectorTurn, PageContext, TranscriptEntry } from "./types";
 
 export interface Insight {
   title: string;
@@ -22,6 +22,11 @@ export interface EngineCallbacks {
   onInsight(insight: Insight): void;
   onError(message: string | null): void;
   onRunningChange(running: boolean): void;
+  /** Directed mode: full list of covered key-point indexes (fires as each
+   *  covering turn starts playing, and after interruption rollbacks). */
+  onCoveredPoints(points: number[]): void;
+  /** Directed mode: a moderator check-in turn toward the user is playing. */
+  onCheckIn(active: boolean): void;
 }
 
 interface PreparedTurn {
@@ -42,6 +47,16 @@ export class DiscussionEngine {
   factsBlock: string | null = null;
   private page: PageContext = { number: 1, total: 1, text: "" };
 
+  // ---- Directed mode (workstream C) state ----
+  private direction: Direction | null = null;
+  /** Which transcript entry covered which key point — entry indexes let an
+   *  interruption roll back credit for turns that were never spoken. */
+  private coveredMarks: { entryIndex: number; point: number }[] = [];
+  private turnsSinceProgress = 0;
+  private lastOnTrack = true;
+  private pointsSinceCheckIn = 0;
+  private pendingCheckIn: number | null = null; // key point awaiting a moderator check-in
+
   // Playback bookkeeping for interruption fractions.
   private currentEntryIndex = -1;
   private currentChunks: string[] = [];
@@ -53,6 +68,27 @@ export class DiscussionEngine {
 
   get isRunning() {
     return this.running;
+  }
+
+  /** All key-point indexes credited so far (including lookahead turns). */
+  get coveredPoints(): number[] {
+    return this.coveredMarks.map((m) => m.point);
+  }
+
+  /** Set (or clear) the direction for directed mode. Progress resets only
+   *  when the direction actually changes. */
+  setDirection(direction: Direction | null) {
+    const changed =
+      JSON.stringify(direction) !== JSON.stringify(this.direction);
+    this.direction = direction;
+    if (changed) {
+      this.coveredMarks = [];
+      this.turnsSinceProgress = 0;
+      this.lastOnTrack = true;
+      this.pointsSinceCheckIn = 0;
+      this.pendingCheckIn = null;
+      this.cb.onCoveredPoints([]);
+    }
   }
 
   setPage(page: PageContext) {
@@ -72,10 +108,10 @@ export class DiscussionEngine {
     this.cb.onRunningChange(true);
     this.cb.onError(null);
     this.epoch += 1;
-    void this.runLoop(
-      "Open the seminar: the moderator welcomes the table in one warm line and frames the document the group is examining tonight — then hands off with a pointed question.",
-      false
-    );
+    const opening = this.direction
+      ? `Open the seminar: the moderator welcomes the table in one warm line and frames tonight's DIRECTED session in her own words — the group is examining the document with a specific goal ("${this.direction.goal}") — then hands off with a pointed question aimed at the first key point.`
+      : "Open the seminar: the moderator welcomes the table in one warm line and frames the document the group is examining tonight — then hands off with a pointed question.";
+    void this.runLoop(opening, false);
   }
 
   stop() {
@@ -85,6 +121,7 @@ export class DiscussionEngine {
     this.currentEntryIndex = -1;
     this.cb.onActiveSpeaker(null);
     this.cb.onSubtitle(null);
+    this.cb.onCheckIn(false);
     this.cb.onRunningChange(false);
   }
 
@@ -114,11 +151,43 @@ export class DiscussionEngine {
       const prepared = await pending;
       if (!prepared || this.epoch !== epoch || !this.running) return;
       // One-turn lookahead: request the next turn while this one plays.
-      pending = this.prepare("Continue the discussion naturally.", false, epoch);
+      pending = this.prepare(this.continueDirective(), false, epoch);
       await this.playTurn(prepared, epoch);
       if (this.epoch !== epoch || !this.running) return;
       await sleep(400); // small beat between speakers
     }
+  }
+
+  /** Directive for the next lookahead turn. In directed mode this is where
+   *  check-ins and steering get injected by the client. */
+  private continueDirective(): string {
+    const dir = this.direction;
+    if (!dir) return "Continue the discussion naturally.";
+
+    // 1. A key point just landed and the cadence says: check in with the user.
+    if (this.pendingCheckIn !== null) {
+      const idx = this.pendingCheckIn;
+      this.pendingCheckIn = null;
+      return `Key point index ${idx} ("${dir.keyPoints[idx]}") was just covered. The MODERATOR now takes this turn, faces the USER (look_target "user", invites_user true), and conversationally checks the user's understanding of that specific point.`;
+    }
+
+    const covered = new Set(this.coveredPoints);
+    const nextIdx = dir.keyPoints.findIndex((_, i) => !covered.has(i));
+    if (nextIdx < 0) {
+      return "All key points are covered. Continue naturally; the moderator may begin drawing the session toward a synthesis of the goal.";
+    }
+
+    // 2. Steering: stalled progress or the last turn reported drift.
+    if (this.turnsSinceProgress >= 3 || !this.lastOnTrack) {
+      // Reset the local triggers so we don't steer every single turn.
+      this.turnsSinceProgress = 0;
+      this.lastOnTrack = true;
+      return dir.strictness === "firm"
+        ? `STEERING DIRECTIVE: the discussion has drifted. The moderator politely but firmly cuts in, names the digression in a phrase, and redirects the table to this key point: "${dir.keyPoints[nextIdx]}".`
+        : `STEERING DIRECTIVE: the moderator gracefully bridges what was just said back toward the goal ("${dir.goal}"), next point: "${dir.keyPoints[nextIdx]}".`;
+    }
+
+    return "Continue the discussion naturally.";
   }
 
   private async prepare(
@@ -137,6 +206,11 @@ export class DiscussionEngine {
           currentPage: this.page,
           directive,
           fast,
+          // Directed-mode state rides along on every request (null/absent
+          // keeps the API on its classic path).
+          direction: this.direction,
+          coveredPoints: this.coveredPoints,
+          turnsSinceProgress: this.turnsSinceProgress,
         }),
       });
       if (!res.ok) {
@@ -150,6 +224,7 @@ export class DiscussionEngine {
 
       const spec = specFor(turn.speaker);
       const entryIndex = this.transcript.length;
+      this.recordDirectedSignals(turn, entryIndex);
       this.push({
         kind: "character",
         id: turn.speaker,
@@ -180,6 +255,34 @@ export class DiscussionEngine {
     }
   }
 
+  /** Directed-mode bookkeeping at fetch time, so the lookahead request that
+   *  fires next already carries accurate coveredPoints/turnsSinceProgress. */
+  private recordDirectedSignals(turn: DirectorTurn, entryIndex: number) {
+    const dir = this.direction;
+    if (!dir) return;
+    const cp = turn.covered_point;
+    const covered = new Set(this.coveredPoints);
+    if (
+      typeof cp === "number" &&
+      Number.isInteger(cp) &&
+      cp >= 0 &&
+      cp < dir.keyPoints.length &&
+      !covered.has(cp)
+    ) {
+      this.coveredMarks.push({ entryIndex, point: cp });
+      this.turnsSinceProgress = 0;
+      this.pointsSinceCheckIn += 1;
+      const cadence = dir.checkInStyle === "perPoint" ? 1 : 2;
+      if (this.pointsSinceCheckIn >= cadence) {
+        this.pendingCheckIn = cp;
+        this.pointsSinceCheckIn = 0;
+      }
+    } else {
+      this.turnsSinceProgress += 1;
+    }
+    this.lastOnTrack = turn.on_track ?? true;
+  }
+
   private async fetchTTS(text: string, voiceID: string): Promise<string | null> {
     try {
       const res = await fetch("/api/tts", {
@@ -207,6 +310,18 @@ export class DiscussionEngine {
       text: prepared.turn.text,
     });
 
+    // Directed mode: surface progress/check-in as the turn STARTS playing so
+    // the UI stays in sync with what's actually being heard.
+    if (this.direction) {
+      this.cb.onCoveredPoints(
+        this.coveredMarks
+          .filter((m) => m.entryIndex <= prepared.entryIndex)
+          .map((m) => m.point)
+      );
+      const isModerator = specFor(prepared.turn.speaker)?.isModerator ?? false;
+      this.cb.onCheckIn(isModerator && prepared.turn.invites_user);
+    }
+
     for (let i = 0; i < prepared.audio.length; i++) {
       const url = await prepared.audio[i];
       if (this.epoch !== epoch) return;
@@ -219,6 +334,7 @@ export class DiscussionEngine {
     }
     this.currentEntryIndex = -1;
     this.cb.onActiveSpeaker(null);
+    this.cb.onCheckIn(false);
   }
 
   private playUrl(url: string): Promise<void> {
@@ -250,10 +366,21 @@ export class DiscussionEngine {
   /** After an interruption: drop lookahead turns that were never spoken and
    *  truncate the interrupted line to roughly what was actually heard. */
   private reconcileInterruption() {
+    // Directed mode: a pending check-in is moot once the user jumps in.
+    this.pendingCheckIn = null;
     if (this.currentEntryIndex >= 0) {
       // Remove any lookahead entries appended after the currently playing turn.
       if (this.transcript.length > this.currentEntryIndex + 1) {
         this.transcript = this.transcript.slice(0, this.currentEntryIndex + 1);
+      }
+      // Roll back key-point credit earned by lookahead turns that were dropped.
+      if (
+        this.coveredMarks.some((m) => m.entryIndex > this.currentEntryIndex)
+      ) {
+        this.coveredMarks = this.coveredMarks.filter(
+          (m) => m.entryIndex <= this.currentEntryIndex
+        );
+        if (this.direction) this.cb.onCoveredPoints(this.coveredPoints);
       }
       const entry = this.transcript[this.currentEntryIndex];
       if (entry?.kind === "character") {
@@ -275,6 +402,7 @@ export class DiscussionEngine {
     }
     this.cb.onActiveSpeaker(null);
     this.cb.onSubtitle(null);
+    this.cb.onCheckIn(false);
   }
 
   private push(entry: TranscriptEntry) {

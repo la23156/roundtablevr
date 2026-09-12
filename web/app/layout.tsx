@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import Link from "next/link";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -17,7 +18,15 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        {/* Small fixed nav (workstream A) — the main page header lives in
+            app/page.tsx and is owned by another workstream. */}
+        <nav className="site-nav" aria-label="Site">
+          <Link href="/">The Roundtable</Link>
+          <Link href="/characters">Characters</Link>
+        </nav>
+        {children}
+      </body>
     </html>
   );
 }

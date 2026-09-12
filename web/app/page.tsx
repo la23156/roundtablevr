@@ -6,10 +6,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import PdfViewer, { ExtractedDoc } from "@/components/PdfViewer";
 import CastStrip from "@/components/CastStrip";
 import TranscriptLog from "@/components/TranscriptLog";
+import DirectedPanel, {
+  EMPTY_DIRECTION,
+  isDirectionValid,
+} from "@/components/DirectedPanel";
 import { DiscussionEngine, Insight } from "@/lib/engine";
 import { MicController } from "@/lib/mic";
 import { specFor } from "@/lib/characters";
-import { TranscriptEntry } from "@/lib/types";
+import { Direction, TranscriptEntry } from "@/lib/types";
 
 type DocPhase = "none" | "extracting" | "summarizing" | "ready";
 
@@ -29,6 +33,12 @@ export default function Home() {
   const [insights, setInsights] = useState<Insight[]>([]);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Directed mode (workstream C).
+  const [directedEnabled, setDirectedEnabled] = useState(false);
+  const [direction, setDirection] = useState<Direction>(EMPTY_DIRECTION);
+  const [covered, setCovered] = useState<number[]>([]);
+  const [checkIn, setCheckIn] = useState(false);
 
   const [micOn, setMicOn] = useState(false);
   const [micState, setMicState] = useState<
@@ -50,8 +60,19 @@ export default function Home() {
       onInsight: (insight) => setInsights((prev) => [...prev, insight]),
       onError: setError,
       onRunningChange: setRunning,
+      onCoveredPoints: setCovered,
+      onCheckIn: setCheckIn,
     });
   }
+
+  // Keep the engine's direction in sync: a valid, enabled direction rides on
+  // every /api/turn request; otherwise the classic mode is untouched.
+  const directedValid = isDirectionValid(direction);
+  useEffect(() => {
+    engineRef.current?.setDirection(
+      directedEnabled && directedValid ? direction : null
+    );
+  }, [directedEnabled, directedValid, direction]);
 
   const handleFile = useCallback((f: File | null) => {
     if (!f) return;
@@ -61,6 +82,8 @@ export default function Home() {
     setSubtitle(null);
     setSummary("");
     setFactsReady(false);
+    setCovered([]);
+    setCheckIn(false);
     setError(null);
     setDoc(null);
     docRef.current = null;
@@ -157,7 +180,11 @@ export default function Home() {
   }, []);
 
   const subtitleSpec = subtitle ? specFor(subtitle.speakerId) : null;
-  const canStart = docPhase === "ready" && !running;
+  const canStart =
+    docPhase === "ready" && !running && (!directedEnabled || directedValid);
+  const directedSessionStarted =
+    directedEnabled &&
+    transcript.some((entry) => entry.kind === "character");
 
   return (
     <main className="shell">
@@ -201,7 +228,7 @@ export default function Home() {
           <CastStrip activeSpeaker={activeSpeaker} />
 
           <div
-            className="subtitle-area"
+            className={`subtitle-area${checkIn ? " checkin-pulse" : ""}`}
             style={
               subtitleSpec
                 ? { borderColor: `${subtitleSpec.tint}66` }
@@ -225,6 +252,16 @@ export default function Home() {
             )}
           </div>
 
+          <DirectedPanel
+            enabled={directedEnabled}
+            onEnabledChange={setDirectedEnabled}
+            direction={direction}
+            onDirectionChange={setDirection}
+            covered={covered}
+            running={running}
+            sessionStarted={directedSessionStarted}
+          />
+
           <TranscriptLog entries={transcript} />
 
           {insights.length > 0 && (
@@ -244,6 +281,13 @@ export default function Home() {
           )}
 
           {error && <div className="error-banner">{error}</div>}
+
+          {checkIn && (
+            <div className="checkin-hint">
+              The table turns to <strong>YOU</strong> — press the mic and share
+              your read.
+            </div>
+          )}
 
           <div className="controls">
             {!running ? (

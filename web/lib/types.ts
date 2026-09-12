@@ -31,6 +31,17 @@ export interface DirectorTurn {
   gesture: Gesture;
   insight: string | null; // 3-6 word gem label, else null
   invites_user: boolean;
+  // Directed-mode extensions — present only when the request carried a Direction.
+  covered_point?: number | null; // index into Direction.keyPoints newly covered THIS turn
+  on_track?: boolean; // is the discussion still serving the direction's goal?
+}
+
+/** A user-defined direction for a directed (taught/moderated) session. */
+export interface Direction {
+  goal: string;
+  keyPoints: string[]; // 3-7, ordered
+  strictness: "gentle" | "firm";
+  checkInStyle: "perPoint" | "periodic";
 }
 
 /** Entries in the running transcript handed back to the director. */
@@ -73,4 +84,8 @@ export interface TurnRequest {
   directive?: string;
   userUtterance?: string;
   fast?: boolean;
+  // Directed-mode state (client-owned; all optional — absent means classic mode).
+  direction?: Direction | null;
+  coveredPoints?: number[]; // indexes into direction.keyPoints already covered
+  turnsSinceProgress?: number; // turns since a key point last landed
 }
