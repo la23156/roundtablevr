@@ -7,6 +7,7 @@
 //  window <-> space lifecycle.
 //
 
+import GroupActivities
 import SwiftUI
 import RealityKit
 
@@ -28,9 +29,26 @@ struct ImmersiveView: View {
                 RoundtableScene.setChalkTitle(config.topic.title, in: handles.root)
 
                 if let hud = attachments.entity(for: Self.hudAttachmentID) {
-                    // Low card at the user's table edge, tipped up toward the eyes.
-                    hud.position = [0, SeatingLayout.tableTopHeight + 0.16, -0.72]
-                    hud.orientation = simd_quatf(angle: -0.45, axis: [1, 0, 0])
+                    // Low card at the user's table edge, tipped up toward the
+                    // eyes. SharePlay replicas sit at a template guest seat,
+                    // not the origin, so dock the HUD at THEIR table edge.
+                    if let pose = appModel.groupCoordinator.systemCoordinator?
+                        .localParticipantState.seat?.pose,
+                       appModel.sessionController?.isGroupSession == true {
+                        let seatPos = SIMD3<Float>(Float(pose.position.x), 0, Float(pose.position.z))
+                        let toTable = SeatingLayout.tableCenter - seatPos
+                        let dist = max(simd_length(SIMD3<Float>(toTable.x, 0, toTable.z)), 0.01)
+                        let toward = SIMD3<Float>(toTable.x, 0, toTable.z) / dist
+                        // Face the HUD back toward the seated user (+Z toward them).
+                        let yaw = atan2(-toward.x, -toward.z)
+                        hud.position = seatPos + toward * 1.03
+                            + SIMD3<Float>(0, SeatingLayout.tableTopHeight + 0.16, 0)
+                        hud.orientation = simd_quatf(angle: yaw, axis: [0, 1, 0])
+                            * simd_quatf(angle: -0.45, axis: [1, 0, 0])
+                    } else {
+                        hud.position = [0, SeatingLayout.tableTopHeight + 0.16, -0.72]
+                        hud.orientation = simd_quatf(angle: -0.45, axis: [1, 0, 0])
+                    }
                     handles.root.addChild(hud)
                 }
                 if let subtitles = attachments.entity(for: "subtitles") {
@@ -94,6 +112,10 @@ struct ImmersiveView: View {
             appModel.immersiveSpaceState = .open
             appModel.phase = .inSession
             appModel.sessionController?.sessionDidBecomeActive()
+        }
+        // SharePlay: the group session ended (host left) — leave the space.
+        .onChange(of: appModel.groupSessionEndedWhileImmersed) { _, ended in
+            if ended { leaveSession() }
         }
         .onDisappear {
             appModel.immersiveSpaceState = .closed
@@ -254,8 +276,14 @@ struct SessionHUDView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
-            if let controller = appModel.sessionController, let doc = controller.document {
+            if let controller = appModel.sessionController, let doc = controller.document,
+               !controller.isReplicaSession {   // only the host flips pages
                 pageControls(controller: controller, doc: doc)
+            }
+            if appModel.groupCoordinator.sessionActive {
+                Label("\(appModel.groupCoordinator.participantCount)", systemImage: "person.2.fill")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
             Button(role: .destructive, action: onLeave) {
                 Label("Leave", systemImage: "door.left.hand.open")

@@ -1,6 +1,7 @@
 # Secrets — never commit
 env.txt
 roundtable/roundtable/Secrets.plist
+roundtable/Shared/Secrets.plist
 web/.env*
 
 # macOS / Xcode

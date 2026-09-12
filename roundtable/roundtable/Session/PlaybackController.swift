@@ -50,6 +50,24 @@ final class PlaybackController {
     /// Fired when a turn's audio fully finishes (subtitle fade-out).
     var onTurnEnd: (() -> Void)?
 
+    // MARK: SharePlay hooks (host broadcasts; replicas are fed externally)
+
+    /// Host: the director LLM just returned a turn (fires BEFORE TTS so
+    /// replicas can start synthesizing in parallel with the host).
+    var onTurnPrepared: ((DirectorTurn, UUID, Int, String) -> Void)?
+    /// Host: playback of this turn just started.
+    var onTurnStarted: ((UUID) -> Void)?
+    /// Replica mode: no local fill loop; the buffer is fed by the network.
+    private(set) var isReplica = false
+    /// ID of the turn currently playing (for turnInterrupted broadcasts).
+    private(set) var currentTurnID: UUID?
+    /// Replica: prepared turns waiting for the host's turnStart.
+    private var remotePrepared: [UUID: PreparedTurn] = [:]
+    /// Replica: a turnStart that arrived before synthesis finished.
+    private var pendingRemoteStartID: UUID?
+
+    func setReplicaMode() { isReplica = true }
+
     /// User head position provider for look-at (falls back to seated origin).
     var userHead: () -> SIMD3<Float> = { SIMD3<Float>(0, 1.2, 0) }
 
@@ -71,6 +89,7 @@ final class PlaybackController {
     /// Begin generating turns (no scene needed) — called the moment the user
     /// taps "Enter the Roundtable" so audio is ready when the room appears.
     func startGenerating() {
+        guard !isReplica else { return }   // replicas play network-fed turns
         guard fillTask == nil else { return }
         fillTask = Task { [weak self] in
             await self?.fillLoop()
@@ -108,6 +127,10 @@ final class PlaybackController {
                 guard let (turn, epoch) = try await director.generateNextTurn(directive: directive, fast: fast) else { continue }
                 let llmDone = CACurrentMediaTime()
                 let voice = config.cast.first { $0.id == turn.speaker }?.voiceID ?? config.cast[0].voiceID
+                let turnID = UUID()
+                // SharePlay: replicas get the text NOW so their local TTS runs
+                // in parallel with ours (audio bytes never cross the wire).
+                onTurnPrepared?(turn, turnID, epoch, voice)
                 // Returns as soon as the FIRST chunk is synthesized; the rest
                 // fills in while earlier chunks play.
                 let audio = try await TurnSynthesizer.synthesize(text: turn.text, voiceID: voice, tts: tts)
@@ -116,7 +139,7 @@ final class PlaybackController {
                              turn.speaker, fast ? " (fast)" : "", llmDone - llmStart, ttsDone - llmDone))
                 let current = await director.epoch
                 guard epoch == current else { continue }
-                buffer.append(PreparedTurn(turn: turn, audio: audio, epoch: epoch))
+                buffer.append(PreparedTurn(id: turnID, turn: turn, audio: audio, epoch: epoch))
             } catch {
                 if Task.isCancelled || error is CancellationError { return }
                 print("fillLoop error: \(error)")
@@ -151,6 +174,8 @@ final class PlaybackController {
         }
         playing = true
         currentSpeakerID = speaker.spec.id
+        currentTurnID = prepared.id
+        onTurnStarted?(prepared.id)
         if let t0 = interjectedAt {
             interjectedAt = nil
             print(String(format: "SESSION-LAT end-of-speech -> reply audio: %.2fs", CACurrentMediaTime() - t0))
@@ -233,12 +258,56 @@ final class PlaybackController {
     private func turnFinished() {
         playing = false
         currentSpeakerID = nil
+        currentTurnID = nil
         onTurnEnd?()
         lipSync.stop()
         gem.attach(to: nil)
         idleGazes()
+        guard !isReplica else { return }   // the host's turnStart drives replicas
         let gap = Double.random(in: 0.3...1.0) * config.settings.paceMultiplier
         playNextWhenReady(afterGap: gap)
+    }
+
+    // MARK: - Replica feed (SharePlay: turns arrive from the host)
+
+    /// A turnPrepared message arrived: synthesize the audio locally and hold
+    /// the turn until the host's turnStart (which may already be waiting).
+    func enqueueRemote(turn: DirectorTurn, id: UUID, voiceID: String, epoch: Int) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let audio = try await TurnSynthesizer.synthesize(text: turn.text, voiceID: voiceID, tts: tts)
+                let current = await director.epoch
+                guard epoch >= current else { return }   // stale: interrupted since
+                let prepared = PreparedTurn(id: id, turn: turn, audio: audio, epoch: epoch)
+                remotePrepared[id] = prepared
+                if pendingRemoteStartID == id {
+                    pendingRemoteStartID = nil
+                    playRemote(id)
+                }
+            } catch {
+                print("SESSION replica synth failed for turn \(id): \(error)")
+            }
+        }
+    }
+
+    /// The host started playing this turn: play our local synthesis of it.
+    func playRemote(_ id: UUID) {
+        guard let prepared = remotePrepared.removeValue(forKey: id) else {
+            pendingRemoteStartID = id   // synthesis still running; play when ready
+            return
+        }
+        pendingRemoteStartID = nil
+        gapTask?.cancel()
+        if playing { _ = interruptCurrent() }
+        play(prepared)
+    }
+
+    /// Drop buffered remote turns (a human interjected; new epoch incoming).
+    func clearRemoteBuffer() {
+        remotePrepared.removeAll()
+        pendingRemoteStartID = nil
+        buffer.removeAll()
     }
 
     // MARK: - Interruption (driven by SessionController)
@@ -295,6 +364,7 @@ final class PlaybackController {
         gem.attach(to: nil)
         playing = false
         currentSpeakerID = nil
+        currentTurnID = nil
         gapTask?.cancel()
         return fraction
     }
@@ -317,6 +387,29 @@ final class PlaybackController {
         // Everyone turns to the user for a beat — someone at the table spoke.
         for character in orderedCast {
             character.lookTarget = userHead()
+        }
+        startGenerating()
+        playNextWhenReady(afterGap: 0.05)
+    }
+
+    /// A remote SharePlay human said something (host only): same treatment as
+    /// a local interjection, but the cast addresses the guest by name and
+    /// turns toward their seat.
+    func interjectGuest(name: String, text: String, facedName: String?,
+                        guestPosition: SIMD3<Float>?) {
+        buffer.removeAll()
+        interjectedAt = CACurrentMediaTime()
+        nextTurnIsFast = true
+        fillTask?.cancel()
+        fillTask = nil
+        if let facedName {
+            nextDirective = "\(name), a human guest at the table, just spoke directly to \(facedName): \"\(text)\". \(facedName) responds first, addressing \(name) by name. Others may chime in after."
+        } else {
+            nextDirective = "\(name), a human guest at the table, just said: \"\(text)\". Whoever is most relevant responds first, addressing \(name) by name."
+        }
+        let look = guestPosition ?? userHead()
+        for character in orderedCast {
+            character.lookTarget = look
         }
         startGenerating()
         playNextWhenReady(afterGap: 0.05)

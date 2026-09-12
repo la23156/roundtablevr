@@ -57,6 +57,19 @@ actor ConversationDirector {
         return epoch
     }
 
+    /// SharePlay replica: advance the local epoch to match the host's so the
+    /// shared staleness checks (buffered turns, in-flight synthesis) agree.
+    func syncEpoch(to hostEpoch: Int) {
+        if hostEpoch > epoch { epoch = hostEpoch }
+    }
+
+    /// SharePlay host: remote humans are at the table; teach the director to
+    /// address them by name (their lines arrive as [GUEST <NAME>]).
+    private var guestsPresent = false
+    func setGuestsPresent(_ present: Bool) {
+        guestsPresent = present
+    }
+
     func append(_ entry: TranscriptEntry) {
         transcript.append(entry)
     }
@@ -128,6 +141,14 @@ actor ConversationDirector {
             """
         }
 
+        let guestRules = !guestsPresent ? "" : """
+
+        - Other HUMAN guests have joined the table (SharePlay); their lines appear as \
+        [GUEST <NAME>]. Treat each guest as a full participant: when a guest speaks, the \
+        first response engages their point directly and addresses them BY NAME. Never \
+        confuse a guest with the USER.
+        """
+
         let docRules = docSummary == nil ? "" : """
 
         - The characters are discussing the uploaded document. They know the summary above and the \
@@ -156,7 +177,7 @@ actor ConversationDirector {
         - Invite the user in at most once every ~6 turns ("What do you think?") — set invites_user true then.
         - When the user spoke, the first response engages their point directly and by name ("you").
         - insight: a 3-6 word title ONLY for genuinely striking ideas (max ~1 in 4 turns), else null.
-        - No stage directions, no asterisks, no emoji — pure spoken dialogue in `text`.\(docRules)
+        - No stage directions, no asterisks, no emoji — pure spoken dialogue in `text`.\(docRules)\(guestRules)
         \(freshFactsBlock.map { "\n\($0)" } ?? "")
         """
     }

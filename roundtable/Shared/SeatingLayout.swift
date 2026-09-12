@@ -65,4 +65,48 @@ enum SeatingLayout {
     static func headPosition(of seat: Seat) -> SIMD3<Float> {
         SIMD3<Float>(seat.position.x, seatedEyeHeight, seat.position.z)
     }
+
+    // MARK: - SharePlay human guests
+
+    /// Maximum remote humans that get a seat/easel around the table.
+    static let maxHumanGuests = 4
+
+    /// Seats for remote HUMAN participants (Spatial Personas / iPhone guest
+    /// easels), interleaved with the AI cast on the same ellipse.
+    ///
+    /// The AI cast occupies the arc opposite the host (see characterSeats);
+    /// guests fill the gap boundaries of that arc: slots 0 and 1 flank the
+    /// host just inside the clearance zone edges (left/right of the host),
+    /// slots 2 and 3 bisect the first/last AI seat gaps. All slots are >= 1 m
+    /// apart from each other and from the host seat at the origin — Personas
+    /// need personal space; AI avatars may sit closer.
+    ///
+    /// The SharePlay spatial template uses these SAME coordinates (template
+    /// origin == group immersive space origin, WWDC24 10201), so a Persona
+    /// lands exactly where the scene renders its empty chair. The slot
+    /// geometry is fixed (computed for the maximum cast of 5) so the template
+    /// is identical on every device regardless of tonight's cast size.
+    static func humanPersonaSeats() -> [Seat] {
+        let a = tableSemiX + seatSetback
+        let b = tableSemiZ + seatSetback
+        let arcStart = userAngle + userClearance
+        let arcLength = 2 * .pi - 2 * userClearance
+        let n: Float = 5
+
+        // Arc parameters t in [0,1]: 0/1 are the clearance edges beside the
+        // host; 1/n and (n-1)/n bisect the outermost AI seat gaps.
+        let params: [Float] = [0, 1, 1 / n, (n - 1) / n]
+
+        return params.prefix(maxHumanGuests).map { t in
+            let theta = arcStart + t * arcLength
+            let position = tableCenter + SIMD3<Float>(a * cos(theta), 0, b * sin(theta))
+            let toCenter = tableCenter - position
+            let yaw = atan2(-toCenter.x, -toCenter.z)
+            return Seat(position: position, yaw: yaw)
+        }
+    }
+
+    /// Host seat in template/space coordinates (the space origin, facing the
+    /// table center).
+    static let hostSeatPosition = SIMD3<Float>(0, 0, 0)
 }

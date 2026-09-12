@@ -52,12 +52,16 @@ final class CharacterStore {
         }
     }
 
+    private struct Envelope: Codable {
+        let characters: [RemoteCharacterDef]
+    }
+
     func refresh() async {
         var request = URLRequest(url: Self.endpoint)
         request.timeoutInterval = 8
         guard let (data, response) = try? await URLSession.shared.data(for: request),
               (response as? HTTPURLResponse)?.statusCode == 200,
-              let defs = try? JSONDecoder().decode([RemoteCharacterDef].self, from: data) else {
+              let defs = try? JSONDecoder().decode(Envelope.self, from: data).characters else {
             print("CharacterStore: refresh failed (offline? platform down?) — using cache")
             return
         }

@@ -364,6 +364,40 @@ enum RoundtableScene {
         return anchor
     }
 
+    // MARK: - SharePlay guest seats
+
+    /// Empty chairs at the human guest slots (rendered only while a group
+    /// session is active). Spatial Personas land on these seats via the
+    /// template; iPhone guests get a ParticipantCardEntity easel on top.
+    @MainActor
+    static func installGuestSeats(in root: Entity, seats: [Seat]) async {
+        guard root.findEntity(named: "GuestSeats") == nil else { return }
+        let container = Entity()
+        container.name = "GuestSeats"
+        let chairTemplate = await EnvAssets.model("SchoolChair_01")
+        for (i, seat) in seats.enumerated() {
+            let anchor = Entity()
+            anchor.name = "guestSeat_\(i)"
+            anchor.position = seat.position
+            anchor.orientation = simd_quatf(angle: seat.yaw, axis: [0, 1, 0])
+            if let chairTemplate {
+                let chair = EnvAssets.placed(chairTemplate.clone(recursive: true), at: [0, 0, 0.05], yaw: .pi)
+                chair.name = "Chair"
+                anchor.addChild(chair)
+            } else {
+                let pan = ModelEntity(mesh: .generateBox(width: 0.46, height: 0.05, depth: 0.46), materials: [mediumOak])
+                pan.position = [0, 0.44, 0]
+                anchor.addChild(pan)
+                let back = ModelEntity(mesh: .generateBox(width: 0.46, height: 0.55, depth: 0.05), materials: [mediumOak])
+                back.position = [0, 0.72, 0.23]
+                anchor.addChild(back)
+            }
+            container.addChild(anchor)
+        }
+        root.addChild(container)
+        print("SESSION guest seating installed (\(seats.count) slots)")
+    }
+
     // MARK: - Gem rack
 
     private static func buildGemRack() -> Entity {

@@ -22,6 +22,13 @@ final class GazeTracker {
     var characterHeads: [String: SIMD3<Float>] = [:]
 
     private(set) var headPosition = SIMD3<Float>(0, 1.2, 0)
+
+    /// SharePlay replicas sit at a template seat, not the space origin: seed
+    /// the head position with the seat pose so look-at/HUD math is sane even
+    /// before (or without) live world tracking.
+    func setDefaultHead(_ position: SIMD3<Float>) {
+        headPosition = position
+    }
     private(set) var headForward = SIMD3<Float>(0, 0, -1)
     /// Character the user is currently facing (within a ~15° half-angle cone,
     /// sustained; nil when facing nobody).

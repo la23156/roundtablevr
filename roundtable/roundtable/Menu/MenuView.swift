@@ -5,6 +5,7 @@
 //  Pre-session menu: topic deck, cast picker, settings, enter button.
 //
 
+import GroupActivities
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -13,6 +14,9 @@ struct MenuView: View {
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.openWindow) private var openWindow
+
+    /// SharePlay eligibility (true while in a FaceTime call / nearby group).
+    @StateObject private var groupStateObserver = GroupStateObserver()
 
     @State private var selectedTopicID: String? = TopicDeck.presets.first?.id
     @State private var customTopicText = ""
@@ -60,6 +64,7 @@ struct MenuView: View {
                 topicSection
                 castSection
                 settingsSection
+                shareSection
                 enterSection
             }
             .padding(32)
@@ -74,18 +79,97 @@ struct MenuView: View {
         .onAppear {
             // Debug hooks so automated simulator runs can reach the immersive
             // scene without UI interaction:
-            //   -pdfTest   loads the bundled SamplePitch.pdf, summarizes it,
-            //              then auto-enters in document mode.
-            //   -autoEnter enters immediately with the default topic.
+            //   -pdfTest        loads the bundled SamplePitch.pdf, summarizes
+            //                   it, then auto-enters in document mode.
+            //   -autoEnter      enters immediately with the default topic.
+            //   -rtMessageTest  round-trips every SharePlay message + prints
+            //                   the seating template math, then idles.
             Task { await appModel.characterStore.refresh() }
             let args = ProcessInfo.processInfo.arguments
             if args.contains("-cardTest") {
                 openWindow(id: AppModel.castTableWindowID)
             }
+            if args.contains("-rtMessageTest") {
+                RTMessageSelfTest.run()
+            }
             if args.contains("-pdfTest") {
                 runPDFTest()
             } else if args.contains("-autoEnter") {
                 enterRoundtable()
+            }
+        }
+        // SharePlay replica: the host entered the shared space and we have
+        // the snapshot — follow them in.
+        .onChange(of: appModel.replicaStartTick) {
+            startReplicaIfReady()
+        }
+    }
+
+    // MARK: - SharePlay
+
+    private var shareSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Bring Friends")
+                .font(.system(.title2, design: .serif).weight(.semibold))
+            if appModel.groupCoordinator.sessionActive {
+                HStack(spacing: 12) {
+                    Image(systemName: "shareplay")
+                        .foregroundStyle(.green)
+                    Text(appModel.groupCoordinator.isHost
+                         ? "Sharing the Roundtable — \(appModel.groupCoordinator.participantCount) at the table"
+                         : "Joined a shared Roundtable — \(appModel.groupCoordinator.participantCount) at the table")
+                        .font(.callout)
+                    if !appModel.groupCoordinator.isHost {
+                        Text("waiting for the host to enter…")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } else if groupStateObserver.isEligibleForGroupSession {
+                HStack(spacing: 12) {
+                    Button {
+                        Task {
+                            await appModel.groupCoordinator.activate(
+                                topicTitle: selectedTopic?.title ?? "Roundtable")
+                        }
+                    } label: {
+                        Label("Share the Roundtable", systemImage: "shareplay")
+                            .font(.callout.weight(.semibold))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+                    Text("Friends on FaceTime join at the table — Vision Pro as Personas, iPhone on a table card.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Text("Start a FaceTime call to share the Roundtable (SharePlay).")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// Replica flow: needs (1) an active non-host group session, (2) the
+    /// host's snapshot, (3) the group immersion style saying "open".
+    private func startReplicaIfReady() {
+        guard appModel.phase == .menu, appModel.sessionController == nil,
+              appModel.immersiveSpaceState == .closed,
+              appModel.groupCoordinator.sessionActive,
+              !appModel.groupCoordinator.isHost,
+              appModel.groupWantsImmersive,
+              let snapshot = appModel.pendingSnapshot else { return }
+        guard appModel.beginReplicaSession(snapshot: snapshot) else { return }
+        appModel.immersiveSpaceState = .inTransition
+        Task {
+            switch await openImmersiveSpace(id: AppModel.immersiveSpaceID) {
+            case .opened:
+                dismissWindow(id: AppModel.mainWindowID)
+                dismissWindow(id: AppModel.castTableWindowID)
+            default:
+                appModel.immersiveSpaceState = .closed
+                appModel.sessionController = nil
+                appModel.phase = .menu
             }
         }
     }
