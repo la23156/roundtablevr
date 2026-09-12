@@ -8,6 +8,7 @@
 
 import { chunksFor } from "./chunker";
 import { specFor } from "./characters";
+import type { CharacterDef } from "./characterTypes";
 import { Direction, DirectorTurn, PageContext, TranscriptEntry } from "./types";
 
 export interface Insight {
@@ -46,6 +47,25 @@ export class DiscussionEngine {
   summary = "";
   factsBlock: string | null = null;
   private page: PageContext = { number: 1, total: 1, text: "" };
+
+  // ---- Seated roster (workstream B) ----
+  /** The seated CharacterDefs, in seat order. Null → classic built-in five. */
+  private cast: CharacterDef[] | null = null;
+
+  /** Set the session cast from the card table's seated set. */
+  setCast(defs: CharacterDef[]) {
+    this.cast = defs.length > 0 ? defs : null;
+  }
+
+  /** Resolve a speaker id against the seated cast first (customs included),
+   *  falling back to the static built-in specs. */
+  private lookup(
+    id: string
+  ): { name: string; voiceID: string; isModerator: boolean } | undefined {
+    const def = this.cast?.find((c) => c.id === id);
+    if (def) return def;
+    return specFor(id);
+  }
 
   // ---- Directed mode (workstream C) state ----
   private direction: Direction | null = null;
@@ -206,6 +226,8 @@ export class DiscussionEngine {
           currentPage: this.page,
           directive,
           fast,
+          // Seated roster: absent means the classic built-in five.
+          castIds: this.cast?.map((c) => c.id),
           // Directed-mode state rides along on every request (null/absent
           // keeps the API on its classic path).
           direction: this.direction,
@@ -222,7 +244,7 @@ export class DiscussionEngine {
       const turn = (await res.json()) as DirectorTurn;
       if (this.epoch !== epoch) return null;
 
-      const spec = specFor(turn.speaker);
+      const spec = this.lookup(turn.speaker);
       const entryIndex = this.transcript.length;
       this.recordDirectedSignals(turn, entryIndex);
       this.push({
@@ -318,7 +340,8 @@ export class DiscussionEngine {
           .filter((m) => m.entryIndex <= prepared.entryIndex)
           .map((m) => m.point)
       );
-      const isModerator = specFor(prepared.turn.speaker)?.isModerator ?? false;
+      const isModerator =
+        this.lookup(prepared.turn.speaker)?.isModerator ?? false;
       this.cb.onCheckIn(isModerator && prepared.turn.invites_user);
     }
 

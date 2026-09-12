@@ -5,6 +5,8 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { CAST } from "@/lib/characters";
+import { BUILT_IN_CHARACTERS } from "@/lib/characterTypes";
+import { getAllCharacters } from "@/lib/characterStore";
 import {
   Direction,
   DirectorTurn,
@@ -17,16 +19,62 @@ import { DIRECTOR_MODEL, FAST_MODEL, structuredResponse } from "@/lib/openai";
 
 export const maxDuration = 60;
 
+// ---- Seated roster (workstream B) ------------------------------------------
+
+/** What the director needs to know about one seat at the table. Both the
+ *  static CAST specs and CharacterDefs satisfy this structurally. */
+interface CastMember {
+  id: string;
+  name: string;
+  archetype: string;
+  worldview: string;
+  speechStyle: string;
+  isModerator: boolean;
+}
+
+/**
+ * Resolve the request's castIds into cast sheets. Absent/empty castIds keeps
+ * the classic built-in five (byte-identical behavior). Built-ins resolve
+ * locally; any unknown id triggers ONE store read for custom characters.
+ * Throws with a client-safe message on unknown ids.
+ */
+async function resolveCast(castIds: unknown): Promise<CastMember[]> {
+  if (!Array.isArray(castIds) || castIds.length === 0) return CAST;
+  const ids = [...new Set(castIds.filter((v): v is string => typeof v === "string" && v.length > 0))];
+  if (ids.length > 8) {
+    throw new Error("castIds must list at most 8 distinct character ids");
+  }
+  const needsCustoms = ids.some(
+    (id) => !BUILT_IN_CHARACTERS.some((c) => c.id === id)
+  );
+  const pool: CastMember[] = needsCustoms
+    ? await getAllCharacters()
+    : BUILT_IN_CHARACTERS;
+  const members = ids.map((id) => {
+    const found = pool.find((c) => c.id === id);
+    if (!found) throw new Error(`Unknown character id in castIds: ${id}`);
+    return found;
+  });
+  // The table always needs its moderator; the client locks her into seat 0,
+  // but never trust the wire.
+  if (!members.some((m) => m.isModerator)) {
+    const moderator = CAST.find((c) => c.isModerator);
+    if (moderator) members.unshift(moderator);
+  }
+  return members;
+}
+
 // ---- Directed mode (workstream C) -----------------------------------------
 
 /** Extra system-prompt block, present only when the request carries a Direction.
  *  Turns the moderator into a teacher working through user-defined key points. */
 function directedBlock(
+  cast: CastMember[],
   direction: Direction,
   coveredPoints: number[],
   turnsSinceProgress: number
 ): string {
-  const moderator = CAST.find((c) => c.isModerator);
+  const moderator = cast.find((c) => c.isModerator);
   const modName = moderator?.name ?? "the moderator";
   const covered = new Set(coveredPoints);
   const pointLines = direction.keyPoints
@@ -77,12 +125,13 @@ TEACHING RULES:
 // ---------------------------------------------------------------------------
 
 function systemPrompt(
+  cast: CastMember[],
   summary: string,
   page: TurnRequest["currentPage"],
   factsBlock?: string | null,
   directed?: string
 ): string {
-  const castSheets = CAST.map(
+  const castSheets = cast.map(
     (spec) =>
       `${spec.id}: ${spec.name} — ${spec.archetype}${
         spec.isModerator ? " (MODERATOR)" : ""
@@ -181,7 +230,18 @@ export async function POST(request: NextRequest) {
   const turnsSinceProgress =
     typeof body.turnsSinceProgress === "number" ? body.turnsSinceProgress : 0;
 
-  const castIDs = CAST.map((c) => c.id);
+  // Seated roster (workstream B): absent castIds keeps the classic five.
+  let cast: CastMember[];
+  try {
+    cast = await resolveCast(body.castIds);
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Invalid castIds" },
+      { status: 400 }
+    );
+  }
+
+  const castIDs = cast.map((c) => c.id);
   const schema: Record<string, unknown> = {
     type: "object",
     properties: {
@@ -224,11 +284,12 @@ export async function POST(request: NextRequest) {
     const turn = await structuredResponse<DirectorTurn>({
       model: body.fast ? FAST_MODEL : DIRECTOR_MODEL,
       instructions: systemPrompt(
+        cast,
         body.summary ?? "",
         body.currentPage,
         body.factsBlock,
         direction
-          ? directedBlock(direction, coveredPoints, turnsSinceProgress)
+          ? directedBlock(cast, direction, coveredPoints, turnsSinceProgress)
           : undefined
       ),
       input: inputBlock({ ...body, transcript }),

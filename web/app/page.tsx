@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import PdfViewer, { ExtractedDoc } from "@/components/PdfViewer";
-import CastStrip from "@/components/CastStrip";
+import CardTable from "@/components/CardTable";
 import TranscriptLog from "@/components/TranscriptLog";
 import DirectedPanel, {
   EMPTY_DIRECTION,
@@ -13,6 +13,8 @@ import DirectedPanel, {
 import { DiscussionEngine, Insight } from "@/lib/engine";
 import { MicController } from "@/lib/mic";
 import { specFor } from "@/lib/characters";
+import { BUILT_IN_CHARACTERS, type CharacterDef } from "@/lib/characterTypes";
+import { MIN_SEATED } from "@/lib/rosterState";
 import { Direction, TranscriptEntry } from "@/lib/types";
 
 type DocPhase = "none" | "extracting" | "summarizing" | "ready";
@@ -33,6 +35,10 @@ export default function Home() {
   const [insights, setInsights] = useState<Insight[]>([]);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Card roster (workstream B): seated cast + full fetched roster.
+  const [seatedCast, setSeatedCast] = useState<CharacterDef[]>([]);
+  const [roster, setRoster] = useState<CharacterDef[]>(BUILT_IN_CHARACTERS);
 
   // Directed mode (workstream C).
   const [directedEnabled, setDirectedEnabled] = useState(false);
@@ -64,6 +70,17 @@ export default function Home() {
       onCheckIn: setCheckIn,
     });
   }
+
+  // The seated card set IS the session cast: castIds ride on every /api/turn
+  // request, and voice/name lookups resolve custom characters too.
+  const handleCastChange = useCallback(
+    (seated: CharacterDef[], all: CharacterDef[]) => {
+      setSeatedCast(seated);
+      setRoster(all);
+      engineRef.current?.setCast(seated);
+    },
+    []
+  );
 
   // Keep the engine's direction in sync: a valid, enabled direction rides on
   // every /api/turn request; otherwise the classic mode is untouched.
@@ -179,9 +196,21 @@ export default function Home() {
     };
   }, []);
 
-  const subtitleSpec = subtitle ? specFor(subtitle.speakerId) : null;
+  // Resolve speaker display info from the fetched roster (customs included),
+  // falling back to the static built-in specs.
+  const subtitleDef = subtitle
+    ? roster.find((c) => c.id === subtitle.speakerId)
+    : undefined;
+  const subtitleFallback = subtitle ? specFor(subtitle.speakerId) : undefined;
+  const subtitleTint = subtitleDef?.tintHex ?? subtitleFallback?.tint ?? null;
+  const subtitleName =
+    subtitleDef?.name ?? subtitleFallback?.name ?? subtitle?.speakerId ?? "";
+  const rosterReady = seatedCast.length >= MIN_SEATED;
   const canStart =
-    docPhase === "ready" && !running && (!directedEnabled || directedValid);
+    docPhase === "ready" &&
+    !running &&
+    rosterReady &&
+    (!directedEnabled || directedValid);
   const directedSessionStarted =
     directedEnabled &&
     transcript.some((entry) => entry.kind === "character");
@@ -225,23 +254,24 @@ export default function Home() {
         </section>
 
         <section className="salon-pane">
-          <CastStrip activeSpeaker={activeSpeaker} />
+          <CardTable
+            activeSpeaker={activeSpeaker}
+            onCastChange={handleCastChange}
+          />
 
           <div
             className={`subtitle-area${checkIn ? " checkin-pulse" : ""}`}
             style={
-              subtitleSpec
-                ? { borderColor: `${subtitleSpec.tint}66` }
-                : undefined
+              subtitleTint ? { borderColor: `${subtitleTint}66` } : undefined
             }
           >
-            {subtitle && subtitleSpec ? (
+            {subtitle ? (
               <>
                 <div
                   className="subtitle-speaker"
-                  style={{ color: subtitleSpec.tint }}
+                  style={subtitleTint ? { color: subtitleTint } : undefined}
                 >
-                  {subtitleSpec.name}
+                  {subtitleName}
                 </div>
                 <div className="subtitle-text">{subtitle.text}</div>
               </>
@@ -262,7 +292,10 @@ export default function Home() {
             sessionStarted={directedSessionStarted}
           />
 
-          <TranscriptLog entries={transcript} />
+          <TranscriptLog
+            entries={transcript}
+            tintFor={(id) => roster.find((c) => c.id === id)?.tintHex}
+          />
 
           {insights.length > 0 && (
             <div className="insights">
@@ -329,6 +362,13 @@ export default function Home() {
                 : "Join by voice"}
             </button>
           </div>
+
+          {docPhase === "ready" && !running && !rosterReady && (
+            <p className="hint">
+              Seat at least {MIN_SEATED} characters (the moderator is already
+              at the table) to start the discussion.
+            </p>
+          )}
 
           {docPhase === "none" && (
             <p className="hint">

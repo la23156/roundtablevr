@@ -6,9 +6,11 @@ import { TranscriptEntry } from "@/lib/types";
 
 interface Props {
   entries: TranscriptEntry[];
+  /** Roster-aware tint lookup (customs included); falls back to built-ins. */
+  tintFor?: (id: string) => string | undefined;
 }
 
-export default function TranscriptLog({ entries }: Props) {
+export default function TranscriptLog({ entries, tintFor }: Props) {
   const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -45,7 +47,8 @@ export default function TranscriptLog({ entries }: Props) {
             </div>
           );
         }
-        const tint = specFor(entry.id)?.tint ?? "#d9c9a8";
+        const tint =
+          tintFor?.(entry.id) ?? specFor(entry.id)?.tint ?? "#d9c9a8";
         return (
           <div key={i} className="transcript-line">
             <span className="transcript-speaker" style={{ color: tint }}>

@@ -84,6 +84,9 @@ export interface TurnRequest {
   directive?: string;
   userUtterance?: string;
   fast?: boolean;
+  /** Seated roster (workstream B): ids of the characters at the table, in
+   *  seat order. Absent/empty means the classic built-in five. */
+  castIds?: string[];
   // Directed-mode state (client-owned; all optional — absent means classic mode).
   direction?: Direction | null;
   coveredPoints?: number[]; // indexes into direction.keyPoints already covered
