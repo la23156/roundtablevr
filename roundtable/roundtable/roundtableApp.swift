@@ -17,6 +17,14 @@ struct roundtableApp: App {
         }
         .windowResizability(.contentSize)
 
+        WindowGroup(id: AppModel.castTableWindowID) {
+            CastTableVolume()
+                .environment(appModel)
+        }
+        .windowStyle(.volumetric)
+        .defaultSize(width: 0.9, height: 0.55, depth: 0.55, in: .meters)
+        .windowResizability(.contentSize)
+
         ImmersiveSpace(id: AppModel.immersiveSpaceID) {
             ImmersiveView()
                 .environment(appModel)

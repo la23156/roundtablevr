@@ -12,10 +12,10 @@ struct MenuView: View {
     @Environment(AppModel.self) private var appModel
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissWindow) private var dismissWindow
+    @Environment(\.openWindow) private var openWindow
 
     @State private var selectedTopicID: String? = TopicDeck.presets.first?.id
     @State private var customTopicText = ""
-    @State private var selectedCastIDs: Set<String> = ["elowen", "marcus", "zara", "nadia"]
     @State private var settings = SessionSettings()
     @State private var enterError: String?
 
@@ -44,7 +44,7 @@ struct MenuView: View {
     }
 
     private var castIsValid: Bool {
-        (3...5).contains(selectedCastIDs.count) && selectedCastIDs.contains("elowen")
+        (3...5).contains(appModel.selectedCastIDs.count) && appModel.selectedCastIDs.contains("elowen")
     }
 
     private var canEnter: Bool {
@@ -77,7 +77,11 @@ struct MenuView: View {
             //   -pdfTest   loads the bundled SamplePitch.pdf, summarizes it,
             //              then auto-enters in document mode.
             //   -autoEnter enters immediately with the default topic.
+            Task { await appModel.characterStore.refresh() }
             let args = ProcessInfo.processInfo.arguments
+            if args.contains("-cardTest") {
+                openWindow(id: AppModel.castTableWindowID)
+            }
             if args.contains("-pdfTest") {
                 runPDFTest()
             } else if args.contains("-autoEnter") {
@@ -248,14 +252,22 @@ struct MenuView: View {
             HStack(alignment: .firstTextBaseline) {
                 Text("The Table")
                     .font(.system(.title2, design: .serif).weight(.semibold))
+                Spacer()
+                Button {
+                    openWindow(id: AppModel.castTableWindowID)
+                } label: {
+                    Label("Deal the cards", systemImage: "rectangle.portrait.on.rectangle.portrait.angled")
+                        .font(.callout.weight(.semibold))
+                }
+                .buttonStyle(.bordered)
                 Text("choose 3–5 · Prof. Hart moderates")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
 
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 14), count: 5), spacing: 14) {
-                ForEach(CharacterRoster.all) { spec in
-                    CastTileView(spec: spec, isSelected: selectedCastIDs.contains(spec.id))
+                ForEach(appModel.characterStore.all) { spec in
+                    CastTileView(spec: spec, isSelected: appModel.selectedCastIDs.contains(spec.id))
                         .onTapGesture { toggleCast(spec) }
                 }
             }
@@ -264,10 +276,10 @@ struct MenuView: View {
 
     private func toggleCast(_ spec: CharacterSpec) {
         if spec.isModerator { return } // moderator always seated
-        if selectedCastIDs.contains(spec.id) {
-            selectedCastIDs.remove(spec.id)
+        if appModel.selectedCastIDs.contains(spec.id) {
+            appModel.selectedCastIDs.remove(spec.id)
         } else {
-            selectedCastIDs.insert(spec.id)
+            appModel.selectedCastIDs.insert(spec.id)
         }
     }
 
@@ -321,7 +333,7 @@ struct MenuView: View {
         // starts, which re-fires onAppear — never start a second session.
         guard appModel.phase == .menu, appModel.sessionController == nil,
               let topic = selectedTopic else { return }
-        let cast = CharacterRoster.all.filter { selectedCastIDs.contains($0.id) }
+        let cast = appModel.characterStore.all.filter { appModel.selectedCastIDs.contains($0.id) }
         let document = documentIsSelected ? pendingDocument : nil
         document?.currentPageIndex = 0
         let config = SessionConfig(topic: topic, cast: cast, settings: settings,
@@ -335,6 +347,7 @@ struct MenuView: View {
             switch await openImmersiveSpace(id: AppModel.immersiveSpaceID) {
             case .opened:
                 dismissWindow(id: AppModel.mainWindowID)
+                dismissWindow(id: AppModel.castTableWindowID)
             case .userCancelled:
                 appModel.immersiveSpaceState = .closed
                 appModel.sessionController = nil

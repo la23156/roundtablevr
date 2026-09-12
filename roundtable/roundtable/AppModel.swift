@@ -10,8 +10,16 @@ import SwiftUI
 @Observable
 class AppModel {
     static let mainWindowID = "main"
+    static let castTableWindowID = "castTable"
     static let immersiveSpaceID = "RoundtableSpace"
     let immersiveSpaceID = AppModel.immersiveSpaceID
+
+    /// Cast selection — single source of truth shared by the 2D picker and
+    /// the 3D card table (moderator always included).
+    var selectedCastIDs: Set<String> = ["elowen", "marcus", "zara", "nadia"]
+
+    /// Built-in + web-created characters (fetched from the platform API).
+    let characterStore = CharacterStore()
 
     enum ImmersiveSpaceState {
         case closed
