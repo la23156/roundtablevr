@@ -161,6 +161,105 @@ export default function HarknessLanding() {
           </div>
         </article>
 
+      </section>
+
+      {/* Inside the simulator: real captures + live mechanics */}
+      <section className="splash-intro" id="inside">
+        <p style={{ fontFamily: "var(--serif)" }}>
+          <strong>Inside the simulator</strong> — captured from the app.
+        </p>
+      </section>
+      <section className="hk-gallery">
+        <figure className="hk-shot wide">
+          <img
+            src="/harkness/training.gif"
+            alt="A live training session: students debating around the table with subtitles"
+            loading="lazy"
+          />
+          <figcaption>
+            A live session: eight students argue an uploaded text among
+            themselves — subtitles, gazes, and the speaking gem move with the
+            conversation while the teacher holds their tongue.
+          </figcaption>
+        </figure>
+
+        <figure className="hk-shot">
+          <img
+            src="/harkness/web_orbs.jpg"
+            alt="The conversation web glowing on the tabletop and guideflow orbs above it"
+            loading="lazy"
+          />
+          <figcaption>
+            The Conversation Web on the tabletop — blue chords are
+            student-to-student; the red strand is the flow bouncing through
+            the teacher. Above it, the Guideflow orbs wait to turn gold.
+          </figcaption>
+        </figure>
+
+        <figure className="hk-shot">
+          <img
+            src="/harkness/classroom.jpg"
+            alt="The decorated classroom: students in distinct shirts, framed paintings, the artifact on the board"
+            loading="lazy"
+          />
+          <figcaption>
+            The class in session: the artifact up on the board, every student
+            a distinct voice, body, and shirt — and a distinct set of flaws.
+          </figcaption>
+        </figure>
+
+        {/* Live mechanics, rebuilt in CSS so they move. */}
+        <figure className="hk-shot">
+          <div className="hk-crib">
+            <div className="hk-crib-title">Your crib sheet — on the table, tilted toward you</div>
+            <div className="hk-note hit">
+              <span className="hk-note-num">1</span>
+              <span className="hk-note-label struck">Moat is regulatory, not technical</span>
+              <span className="hk-note-check">✓ +100</span>
+            </div>
+            <div className="hk-note pulsing">
+              <span className="hk-note-num">2</span>
+              <span className="hk-note-label">Projections assume nonexistent customer</span>
+              <span className="hk-note-closing">closing in…</span>
+            </div>
+            <div className="hk-note">
+              <span className="hk-note-num">3</span>
+              <span className="hk-note-label">Team slide beats product slide</span>
+            </div>
+          </div>
+          <figcaption>
+            The realization nodes, condensed to glanceable labels. A note
+            pulses amber as the discussion closes in on it; when a student
+            lands it, it flashes green, gets struck out, and you score.
+          </figcaption>
+        </figure>
+
+        <figure className="hk-shot">
+          <div className="hk-crib">
+            <div className="hk-crib-title">The Silence Tension Meter</div>
+            <div className="hk-tension">
+              <div className="hk-tension-bar" />
+            </div>
+            <div className="hk-tension-caption">
+              the room is silent — hold it…
+            </div>
+            <div className="hk-hud-line">
+              <span className="hk-score">★ 240</span>
+              <span className="hk-flash good">Silence held +40 — a student steps up</span>
+            </div>
+            <div className="hk-hud-line">
+              <span className="hk-hint">💡 Wren knows this — spotlight her</span>
+            </div>
+          </div>
+          <figcaption>
+            When a thread dies, the bar fills. Speak too soon and you rescued
+            them (−20); outlast it and a student takes ownership (+40). The
+            HUD keeps score and occasionally whispers a coaching hint.
+          </figcaption>
+        </figure>
+      </section>
+
+      <section className="splash-steps">
         <article className="splash-step">
           <div className="splash-step-text">
             <span className="splash-step-num">DEBRIEF</span>

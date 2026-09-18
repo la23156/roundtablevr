@@ -1797,3 +1797,175 @@ body {
   font-size: 0.9rem;
   line-height: 1.5;
 }
+
+/* ===================== HarknessAI: inside-the-simulator gallery ===================== */
+
+.hk-gallery {
+  max-width: 1060px;
+  margin: 0 auto;
+  padding: 8px 24px 40px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 28px;
+}
+
+.hk-shot {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.hk-shot.wide {
+  grid-column: 1 / -1;
+}
+
+.hk-shot img {
+  width: 100%;
+  display: block;
+  border-radius: 12px;
+  border: 1px solid var(--wood-edge);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+}
+
+.hk-shot figcaption {
+  color: var(--parchment-dim);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+/* Crib-sheet mock */
+
+.hk-crib {
+  border-radius: 12px;
+  border: 1px solid var(--wood-edge);
+  background: linear-gradient(180deg, #3a2712, #2a1a0b);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+}
+
+.hk-crib-title {
+  font-family: var(--serif);
+  color: var(--amber-soft);
+  font-size: 0.95rem;
+  margin-bottom: 2px;
+}
+
+.hk-note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #efe4c9;
+  border: 2px solid #9a7b4d;
+  border-radius: 8px;
+  padding: 9px 12px;
+  color: #33210d;
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.hk-note-num {
+  color: #73501e;
+  font-weight: 700;
+  width: 16px;
+}
+
+.hk-note-label.struck {
+  text-decoration: line-through;
+  text-decoration-color: #2e9e4f;
+  text-decoration-thickness: 2px;
+  color: #5a5a52;
+}
+
+.hk-note.hit {
+  background: #dcefd8;
+  border-color: #4fae6a;
+}
+
+.hk-note-check {
+  margin-left: auto;
+  color: #2e9e4f;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.hk-note-closing {
+  margin-left: auto;
+  color: #b4741d;
+  font-size: 0.8rem;
+  font-style: italic;
+  white-space: nowrap;
+}
+
+.hk-note.pulsing {
+  animation: hk-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes hk-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 184, 51, 0); }
+  50% { box-shadow: 0 0 22px 4px rgba(255, 184, 51, 0.8); }
+}
+
+/* Tension meter mock */
+
+.hk-tension {
+  height: 14px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+.hk-tension-bar {
+  height: 100%;
+  width: 0;
+  border-radius: 7px;
+  background: linear-gradient(90deg, #e08a2e, #ffb833);
+  animation: hk-fill 6s linear infinite;
+}
+
+@keyframes hk-fill {
+  0% { width: 0; background: linear-gradient(90deg, #e08a2e, #ffb833); }
+  85% { width: 100%; background: linear-gradient(90deg, #e08a2e, #ffb833); }
+  92% { width: 100%; background: #3fbf62; }
+  100% { width: 100%; background: #3fbf62; }
+}
+
+.hk-tension-caption {
+  color: var(--ink-dim);
+  font-size: 0.8rem;
+  font-style: italic;
+}
+
+.hk-hud-line {
+  display: flex;
+  gap: 14px;
+  align-items: baseline;
+}
+
+.hk-score {
+  color: #ffd54a;
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+.hk-flash.good {
+  color: #57d47c;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.hk-hint {
+  color: #6fd3e0;
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+@media (max-width: 760px) {
+  .hk-gallery {
+    grid-template-columns: 1fr;
+  }
+}
