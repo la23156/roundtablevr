@@ -101,8 +101,20 @@ struct TeacherIntervention: Identifiable {
     let wasLecturingPenalty: Bool
 }
 
+/// Point values for the training scoreboard.
+enum HarknessScore {
+    static let nodeReached = 100
+    static let silenceHeld = 40
+    static let deflectionPassed = 30
+    static let goodMove = 10        // textual tether / spotlight
+    static let rescue = -20
+    static let lecturingPenalty = -40
+}
+
 /// Live scoring state, observed by the HUD; frozen into the debrief at the end.
 struct HarknessStats {
+    /// Running score (node hits, silence discipline, move quality).
+    var score = 0
     // Talk-time (seconds of audio/speech).
     var teacherSeconds: Double = 0
     var studentSeconds: [String: Double] = [:]   // student id -> seconds

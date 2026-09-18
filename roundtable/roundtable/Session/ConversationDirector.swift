@@ -180,6 +180,16 @@ actor ConversationDirector {
         - covered_node: set to a node's number ONLY when the discussion has genuinely, organically \
         arrived at that understanding (a student articulates it in their own words). Else null. Never \
         re-cover an [ALREADY REACHED] node.
+        - closest_node + node_closeness: after writing the line, honestly report which UNCOVERED node \
+        the thread is now nearest (closest_node; null only if the discussion is nowhere near any of \
+        them) and how close it is (node_closeness): 0.2 = same territory, 0.5 = students circling the \
+        idea without seeing it, 0.8 = one good question away, 0.95 = the very next thoughtful turn \
+        could land it. Never exceed 0.95 — landing it is what covered_node is for. When you set \
+        covered_node, report node_closeness 0 toward the next target.
+        - coach_hint: a whisper to the TEACHER (max ~8 words), only when a specific move would pay off \
+        right now ("Wren knows this — spotlight her", "Ask where the text says that", "Node 2 is one \
+        question away"). Null most turns; never more than one hint every few turns; never reveal a \
+        realization's content outright.
         - stall_after: set true when this line would naturally end a thread (~every 5-7 turns, or after \
         a big point lands). The room then goes quiet and the TEACHER's patience is tested. Use it honestly.
         - deflection: set true OCCASIONALLY (~every 6-9 turns) when a confused student turns to the \

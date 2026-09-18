@@ -386,14 +386,14 @@ struct MenuView: View {
             .padding(14)
             .background(RoundedRectangle(cornerRadius: 14).fill(Color.white.opacity(0.05)))
 
-            // 3. The class.
+            // 3. The goal & the class.
             VStack(alignment: .leading, spacing: 6) {
-                Text("Your Class")
+                Text("How to Play")
                     .font(.headline)
-                Text("Eight students take their seats — including a Monopolizer who fills every silence, a Tangent Weaver, a silent Ghost who knows the answers, one confidently incorrect voice, and an Echo. Their flaws are the training.")
+                Text("YOUR GOAL: get the class to reach every realization above ON THEIR OWN — you may only steer with questions, your gaze, and silence. Your crib notes lie on the table in front of you (only you'd recognize them): a note pulses amber as the discussion closes in on it, and when a student lands it, it glows green, gets crossed out, and you score +100.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Text("In the room: hold silences until a student cracks (the tension bar rewards patience), deflect \"is that right?\" back to the table, ask \"where do you see that in the text?\" to kill tangents, and keep your talk-time under 15%.")
+                Text("Eight students take their seats — a Monopolizer who fills every silence, a Tangent Weaver, a silent Ghost who knows the answers, one confidently incorrect voice, and an Echo. Hold silences until a student cracks (+40), deflect \"is that right?\" back to the table (+30), tether tangents to the text (+10), and keep your talk-time under 15%. Answering for them costs points.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }

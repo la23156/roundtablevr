@@ -9,8 +9,23 @@
 //
 
 import SwiftUI
+import UIKit
 
 enum HarknessStudents {
+    /// Muted, plausible shirt colors (flat cotton look) — differentiates
+    /// students sharing a body without reading as costume glow. Loosely
+    /// related to each student's UI tint, several shades desaturated.
+    static let shirtColors: [String: UIColor] = [
+        "jayden": UIColor(red: 0.48, green: 0.17, blue: 0.19, alpha: 1),  // burgundy
+        "sofia": UIColor(red: 0.72, green: 0.55, blue: 0.22, alpha: 1),   // ochre
+        "wren": UIColor(red: 0.42, green: 0.41, blue: 0.56, alpha: 1),    // dusty slate
+        "tyler": UIColor(red: 0.22, green: 0.38, blue: 0.25, alpha: 1),   // forest
+        "maddie": UIColor(red: 0.72, green: 0.5, blue: 0.54, alpha: 1),   // dusty rose
+        "amir": UIColor(red: 0.17, green: 0.23, blue: 0.4, alpha: 1),     // navy
+        "june": UIColor(red: 0.22, green: 0.42, blue: 0.45, alpha: 1),    // teal slate
+        "leo": UIColor(red: 0.65, green: 0.53, blue: 0.38, alpha: 1),     // warm tan
+    ]
+
     /// Archetype by student id (used for scoring: was the Ghost drawn out?).
     static let archetypes: [String: StudentArchetype] = [
         "jayden": .monopolizer,
@@ -138,7 +153,7 @@ enum HarknessStudents {
             speechStyle: "Reflective, zoomed out — 'okay but the real question is…' — occasionally needs pulling back to the page.",
             isModerator: false,
             voiceID: "aura-2-hyperion-en",
-            avatarAssetName: "avaturn",
+            avatarAssetName: "avatarsdk",   // male rig (avaturn is female — voice/body must agree)
             tint: .blue
         ),
     ]

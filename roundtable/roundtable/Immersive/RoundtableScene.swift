@@ -36,6 +36,7 @@ enum RoundtableScene {
         await buildRoomShell(into: root)
         await buildTable(into: root, topicTitle: config.topic.title)
         await buildFurniture(into: root)
+        await buildWallArt(into: root)
         buildPresentationBoard(into: root, visible: config.document != nil)
         if config.document != nil, let chalk = root.findEntity(named: "ChalkTitle") {
             // Nudge the chalk title up so it clears the presentation board.
@@ -128,6 +129,77 @@ enum RoundtableScene {
         }
 
         root.addChild(shell)
+    }
+
+    // MARK: - Wall art & rug (FAL-generated decor)
+
+    /// Framed antique paintings on the walls + a persian rug under the table.
+    /// Images live in DecorArt/ (generated offline via tools/fal_gen.py).
+    @MainActor
+    private static func buildWallArt(into root: Entity) async {
+        let c = SeatingLayout.tableCenter
+
+        /// A framed painting: dark-oak frame box + inset canvas plane.
+        func hang(_ imageName: String, w: Float, h: Float,
+                  at p: SIMD3<Float>, yaw: Float) async {
+            guard let url = Bundle.main.url(forResource: imageName, withExtension: "jpg"),
+                  let texture = try? await TextureResource(contentsOf: url,
+                                                           options: .init(semantic: .color)) else {
+                print("SCENE wall art missing: \(imageName)")
+                return
+            }
+            let holder = Entity()
+            holder.name = "Art_\(imageName)"
+            holder.position = p
+            holder.orientation = simd_quatf(angle: yaw, axis: [0, 1, 0])
+
+            let border: Float = 0.05
+            let frame = ModelEntity(mesh: .generateBox(width: w + border * 2,
+                                                       height: h + border * 2,
+                                                       depth: 0.05,
+                                                       cornerRadius: 0.008),
+                                    materials: [darkOak])
+            holder.addChild(frame)
+
+            var canvasMat = PhysicallyBasedMaterial()
+            canvasMat.baseColor = .init(texture: .init(texture))
+            canvasMat.roughness = .init(floatLiteral: 0.65)
+            canvasMat.metallic = .init(floatLiteral: 0)
+            let canvas = ModelEntity(mesh: .generatePlane(width: w, height: h, cornerRadius: 0.002),
+                                     materials: [canvasMat])
+            canvas.position = [0, 0, 0.028]
+            holder.addChild(canvas)
+            root.addChild(holder)
+        }
+
+        let wallX = roomW / 2 - 0.09      // inner face of E/W walls
+        let backZ = c.z + roomD / 2 - 0.09
+        let farZ = c.z - roomD / 2 + 0.09
+
+        // West wall (user's left), facing +X.
+        await hang("art_landscape", w: 1.15, h: 0.86, at: [-wallX, 2.0, c.z - 1.6], yaw: .pi / 2)
+        await hang("art_botanical", w: 0.72, h: 0.96, at: [-wallX, 2.0, c.z + 0.9], yaw: .pi / 2)
+        // East wall (user's right), facing -X.
+        await hang("art_celestial", w: 1.15, h: 0.86, at: [wallX, 2.0, c.z - 1.6], yaw: -.pi / 2)
+        await hang("art_scholar", w: 0.72, h: 0.96, at: [wallX, 2.0, c.z + 0.9], yaw: -.pi / 2)
+        // Back wall (behind the user), facing -Z: the big map.
+        await hang("art_map", w: 1.6, h: 1.2, at: [0, 2.1, backZ], yaw: .pi)
+        // Far wall, flanking the presentation board / chalk title, facing +Z.
+        await hang("art_stilllife", w: 0.95, h: 0.72, at: [-2.9, 2.05, farZ], yaw: 0)
+
+        // Persian rug under the table (thin plane just above the parquet).
+        if let url = Bundle.main.url(forResource: "rug", withExtension: "jpg"),
+           let texture = try? await TextureResource(contentsOf: url, options: .init(semantic: .color)) {
+            var rugMat = PhysicallyBasedMaterial()
+            rugMat.baseColor = .init(texture: .init(texture))
+            rugMat.roughness = .init(floatLiteral: 0.95)
+            rugMat.metallic = .init(floatLiteral: 0)
+            let rug = ModelEntity(mesh: .generatePlane(width: 5.6, depth: 4.2, cornerRadius: 0.05),
+                                  materials: [rugMat])
+            rug.name = "Rug"
+            rug.position = [c.x, 0.006, c.z]
+            root.addChild(rug)
+        }
     }
 
     // MARK: - Table

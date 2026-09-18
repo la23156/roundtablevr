@@ -75,8 +75,14 @@ final class SessionController {
         let positive: Bool
     }
     private(set) var harknessFlash: HarknessFlash?
+    /// Director's whisper to the teacher (HUD): "Wren knows this — spotlight her".
+    private(set) var coachHint: String?
+    /// 1-based node the class is currently closing in on (HUD "closing in").
+    private(set) var closingInOn: Int?
 
     var isHarkness: Bool { config.mode.isHarkness }
+    @ObservationIgnored private var nodeLabelsTask: Task<[String], Never>?
+    @ObservationIgnored private var coachHintClearTask: Task<Void, Never>?
     @ObservationIgnored private var harknessOverlay: HarknessOverlay?
     @ObservationIgnored private var stallStartedAt: Double?
     /// Seconds the teacher must hold a dead silence before it pays off.
@@ -232,12 +238,34 @@ final class SessionController {
         }
         if let node = turn.coveredNode, harknessStats?.nodesCovered.contains(node) == false {
             harknessStats?.nodesCovered.insert(node)
+            harknessStats?.score += HarknessScore.nodeReached
             harknessOverlay?.markNodeCovered(node)
-            let label = config.mode.harknessSetup?.realizationNodes.indices.contains(node - 1) == true
-                ? config.mode.harknessSetup!.realizationNodes[node - 1] : "node \(node)"
-            showFlash("Realization reached: \(label)", positive: true)
+            harknessOverlay?.markNoteHit(node)
+            showFlash("Realization \(node) reached! +\(HarknessScore.nodeReached)", positive: true)
             Task { [director] in await director.markNodeCovered(node) }
-            print("HARKNESS node \(node) covered")
+            print("HARKNESS node \(node) covered (+\(HarknessScore.nodeReached))")
+        }
+
+        // Closeness pulse on the desk notes + HUD "closing in" cue.
+        let closeness = turn.nodeCloseness ?? 0
+        if let closest = turn.closestNode {
+            print(String(format: "HARKNESS closeness: node %d at %.2f%@", closest, closeness,
+                         turn.coachHint.map { " — hint: \($0)" } ?? ""))
+        }
+        harknessOverlay?.setCloseness(node: turn.closestNode, closeness: closeness)
+        closingInOn = (turn.closestNode != nil && closeness >= 0.6
+                       && harknessStats?.nodesCovered.contains(turn.closestNode!) == false)
+            ? turn.closestNode : nil
+
+        // Coach whisper (kept up briefly; replaced by the next one).
+        if let hint = turn.coachHint, !hint.isEmpty {
+            coachHint = hint
+            coachHintClearTask?.cancel()
+            coachHintClearTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(14))
+                guard !Task.isCancelled else { return }
+                self?.coachHint = nil
+            }
         }
     }
 
@@ -262,7 +290,8 @@ final class SessionController {
         stallStartedAt = nil
         tensionProgress = nil
         harknessStats?.silencesHeld += 1
-        showFlash("Silence held — a student steps up", positive: true)
+        harknessStats?.score += HarknessScore.silenceHeld
+        showFlash("Silence held +\(HarknessScore.silenceHeld) — a student steps up", positive: true)
         print("HARKNESS silence held (\(harknessStats?.silencesHeld ?? 0))")
         playback.resumeAfterStall(directive: """
         The silence stretched until it became genuinely uncomfortable, and the teacher never rescued \
@@ -284,7 +313,8 @@ final class SessionController {
         // Rescue check: they spoke while the tension bar was still filling.
         if stallStartedAt != nil, (tensionProgress ?? 0) < 1 {
             harknessStats?.rescues += 1
-            showFlash("You rescued the silence", positive: false)
+            harknessStats?.score += HarknessScore.rescue
+            showFlash("You rescued the silence \(HarknessScore.rescue)", positive: false)
             print("HARKNESS rescue (\(harknessStats?.rescues ?? 0))")
         }
         stallStartedAt = nil
@@ -313,22 +343,35 @@ final class SessionController {
                         TeacherIntervention(text: text, move: move, wasLecturingPenalty: penalty))
                     if penalty {
                         self.harknessStats?.deflectionsFailed += 1
-                        self.showFlash("Lecturing Penalty — deflect it back next time", positive: false)
+                        self.harknessStats?.score += HarknessScore.lecturingPenalty
+                        self.showFlash("Lecturing Penalty \(HarknessScore.lecturingPenalty) — deflect it back", positive: false)
                     } else if deflectionPending && move.isQuestionMove {
                         self.harknessStats?.deflectionsPassed += 1
-                        self.showFlash("Deflected back to the table", positive: true)
+                        self.harknessStats?.score += HarknessScore.deflectionPassed
+                        self.showFlash("Deflected back to the table +\(HarknessScore.deflectionPassed)", positive: true)
                     } else if move == .lecture {
-                        self.showFlash("Careful — that was a lecture", positive: false)
+                        self.harknessStats?.score += HarknessScore.lecturingPenalty
+                        self.showFlash("Careful — that was a lecture \(HarknessScore.lecturingPenalty)", positive: false)
                     } else if move == .textualTether {
-                        self.showFlash("Textual tether", positive: true)
+                        self.harknessStats?.score += HarknessScore.goodMove
+                        self.showFlash("Textual tether +\(HarknessScore.goodMove)", positive: true)
                     } else if move == .spotlight {
-                        self.showFlash("Spotlight", positive: true)
+                        self.harknessStats?.score += HarknessScore.goodMove
+                        self.showFlash("Spotlight +\(HarknessScore.goodMove)", positive: true)
                     }
                     print("HARKNESS teacher move: \(move.rawValue)\(penalty ? " (PENALTY)" : "")")
                 }
             } catch {
                 print("HARKNESS move classification failed: \(error)")
             }
+        }
+    }
+
+    /// Crib labels when the condensing LLM call fails: first ~6 words.
+    private static func fallbackLabels(for nodes: [String]) -> [String] {
+        nodes.map { node in
+            let words = node.split(separator: " ")
+            return words.count <= 6 ? node : words.prefix(6).joined(separator: " ") + "…"
         }
     }
 
@@ -352,6 +395,14 @@ final class SessionController {
             let overlay = HarknessOverlay(nodeCount: setup.realizationNodes.count)
             handles.root.addChild(overlay.root)
             harknessOverlay = overlay
+            // The crib sheet: condensed node labels on the table in front of
+            // the teacher (condensing kicked off in prefetchOpening).
+            let nodes = setup.realizationNodes
+            Task { @MainActor [weak self] in
+                let labels = await self?.nodeLabelsTask?.value ?? Self.fallbackLabels(for: nodes)
+                await self?.harknessOverlay?.buildTeacherNotes(labels: labels)
+                print("HARKNESS crib notes: \(labels.joined(separator: " | "))")
+            }
         }
 
         // Load avatars (replacing gray-box placeholders) and register them.
@@ -361,6 +412,13 @@ final class SessionController {
             do {
                 let avatar = try await AvatarLoader.load(assetName: spec.avatarAssetName)
                 anchor.findEntity(named: "Placeholder")?.removeFromParent()
+                // HarknessAI: each student gets a distinct, muted shirt color
+                // (duplicated bodies become tellable apart, nothing glows).
+                if isHarkness {
+                    let shirt = HarknessStudents.shirtColors[spec.id] ?? UIColor(spec.tint)
+                    let tinted = avatar.tintClothing(shirt)
+                    print("HARKNESS clothing tint \(spec.id): \(tinted) top mesh(es)")
+                }
                 if let ibl = handles.root.findEntity(named: "IBLSource") {
                     avatar.root.forEachDescendantIncludingSelf { e in
                         if e.components.has(ModelComponent.self) {
@@ -547,7 +605,12 @@ final class SessionController {
                 }
             }
         }
-        if isHarkness {
+        if let setup = config.mode.harknessSetup {
+            // Crib-note labels synthesize while the room loads.
+            let nodes = setup.realizationNodes
+            nodeLabelsTask = Task {
+                (try? await OpenAIClient().condenseNodes(nodes)) ?? Self.fallbackLabels(for: nodes)
+            }
             playback.queueDirective("Class begins: the students have the text (\"\(config.document?.title ?? config.topic.title)\") in front of them; page 1 is on the board. The teacher hasn't spoken. One student (never the Ghost) opens with a first impression — authentic, a little tentative or a little too confident, true to their archetype.")
         } else if let doc = config.document {
             playback.queueDirective("Session start: the moderator welcomes the table, introduces the uploaded document \"\(doc.title)\" — page 1 is up on the presentation board — and invites first impressions of the deck.")
@@ -690,6 +753,9 @@ final class SessionController {
         for card in guestCards.values {
             card.update(dt: Float(dt))
         }
+
+        // HarknessAI: pulse the crib notes the class is closing in on.
+        harknessOverlay?.update(time: time)
 
         // HarknessAI: fill the Silence Tension Meter during a stall.
         if let stallStart = stallStartedAt {

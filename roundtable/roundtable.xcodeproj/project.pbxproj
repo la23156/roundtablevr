@@ -21,7 +21,6 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
-				roundtable.entitlements,
 			);
 			target = 7A9E0979302B8BC7000D9DF1 /* roundtable */;
 		};
@@ -29,7 +28,6 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
-				"roundtable-ios.entitlements",
 			);
 			target = 7B5AEC0100000000000000D1 /* roundtable-ios */;
 		};
@@ -146,8 +144,8 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				7B5AEC0100000000000000B2 /* roundtable-ios */,
 				7B5AEC0100000000000000B1 /* Shared */,
+				7B5AEC0100000000000000B2 /* roundtable-ios */,
 			);
 			name = "roundtable-ios";
 			packageProductDependencies = (
@@ -234,7 +232,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = "roundtable/roundtable.entitlements";
+				CODE_SIGN_ENTITLEMENTS = roundtable/roundtable.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 6PUHVNY254;
@@ -265,7 +263,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = "roundtable/roundtable.entitlements";
+				CODE_SIGN_ENTITLEMENTS = roundtable/roundtable.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 6PUHVNY254;

@@ -37,19 +37,30 @@ struct DirectorTurn: Codable, Equatable {
     var deflection: Bool?
     /// 1-based realization-node index the class just organically reached.
     var coveredNode: Int?
+    /// 1-based index of the UNCOVERED node the thread is currently nearest.
+    var closestNode: Int?
+    /// 0-1: how close the discussion is to landing closestNode (drives the
+    /// pulse on the teacher's desk notes).
+    var nodeCloseness: Double?
+    /// Short coaching whisper for the teacher when a specific move would
+    /// work right now ("Wren knows this — spotlight her"), else null.
+    var coachHint: String?
 
     enum CodingKeys: String, CodingKey {
-        case speaker, text, emotion, gesture, insight
+        case speaker, text, emotion, gesture, insight, deflection
         case lookTarget = "look_target"
         case invitesUser = "invites_user"
         case stallAfter = "stall_after"
-        case deflection
         case coveredNode = "covered_node"
+        case closestNode = "closest_node"
+        case nodeCloseness = "node_closeness"
+        case coachHint = "coach_hint"
     }
 
     init(speaker: String, text: String, emotion: Emotion, lookTarget: String,
          gesture: Gesture, insight: String?, invitesUser: Bool,
-         stallAfter: Bool? = nil, deflection: Bool? = nil, coveredNode: Int? = nil) {
+         stallAfter: Bool? = nil, deflection: Bool? = nil, coveredNode: Int? = nil,
+         closestNode: Int? = nil, nodeCloseness: Double? = nil, coachHint: String? = nil) {
         self.speaker = speaker
         self.text = text
         self.emotion = emotion
@@ -60,6 +71,9 @@ struct DirectorTurn: Codable, Equatable {
         self.stallAfter = stallAfter
         self.deflection = deflection
         self.coveredNode = coveredNode
+        self.closestNode = closestNode
+        self.nodeCloseness = nodeCloseness
+        self.coachHint = coachHint
     }
 
     init(from decoder: Decoder) throws {
@@ -74,6 +88,9 @@ struct DirectorTurn: Codable, Equatable {
         stallAfter = try c.decodeIfPresent(Bool.self, forKey: .stallAfter)
         deflection = try c.decodeIfPresent(Bool.self, forKey: .deflection)
         coveredNode = try c.decodeIfPresent(Int.self, forKey: .coveredNode)
+        closestNode = try c.decodeIfPresent(Int.self, forKey: .closestNode)
+        nodeCloseness = try c.decodeIfPresent(Double.self, forKey: .nodeCloseness)
+        coachHint = try c.decodeIfPresent(String.self, forKey: .coachHint)
     }
 }
 

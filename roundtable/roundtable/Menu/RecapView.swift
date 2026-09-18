@@ -99,8 +99,17 @@ private struct HarknessDebriefView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("Teaching Debrief")
-                .font(.system(.title2, design: .serif).weight(.semibold))
+            HStack(alignment: .firstTextBaseline) {
+                Text("Teaching Debrief")
+                    .font(.system(.title2, design: .serif).weight(.semibold))
+                Spacer()
+                Label("\(stats.score) points", systemImage: "star.fill")
+                    .font(.system(.title3, design: .serif).weight(.bold))
+                    .foregroundStyle(stats.score >= 0 ? .yellow : .red)
+            }
+            Text("Realizations +\(HarknessScore.nodeReached) · silences held +\(HarknessScore.silenceHeld) · deflections +\(HarknessScore.deflectionPassed) · tethers & spotlights +\(HarknessScore.goodMove) · rescues \(HarknessScore.rescue) · lecturing \(HarknessScore.lecturingPenalty)")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
 
             // 1. Talk-time ratio.
             VStack(alignment: .leading, spacing: 8) {

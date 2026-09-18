@@ -53,7 +53,11 @@ struct OpenAIClient {
             properties["stall_after"] = ["type": "boolean"]
             properties["deflection"] = ["type": "boolean"]
             properties["covered_node"] = ["type": ["integer", "null"]]
-            required += ["stall_after", "deflection", "covered_node"]
+            properties["closest_node"] = ["type": ["integer", "null"]]
+            properties["node_closeness"] = ["type": "number"]
+            properties["coach_hint"] = ["type": ["string", "null"]]
+            required += ["stall_after", "deflection", "covered_node",
+                         "closest_node", "node_closeness", "coach_hint"]
         }
         let schema: [String: Any] = [
             "type": "object",
@@ -109,6 +113,38 @@ struct OpenAIClient {
             schema: schema
         )
         return suggestion.nodes
+    }
+
+    /// HarknessAI: condenses each realization node into a 3-6 word crib-note
+    /// label for the teacher's desk notes (glanceable mid-discussion).
+    func condenseNodes(_ nodes: [String]) async throws -> [String] {
+        let schema: [String: Any] = [
+            "type": "object",
+            "properties": [
+                "labels": ["type": "array", "items": ["type": "string"]],
+            ],
+            "required": ["labels"],
+            "additionalProperties": false,
+        ]
+        let instructions = """
+        Condense each numbered realization into a 3-6 word crib-note label a teacher can read \
+        at a glance mid-discussion. Keep the load-bearing specifics (names, numbers), drop \
+        everything else. Return exactly one label per input, in order.
+        """
+        struct Condensed: Decodable { let labels: [String] }
+        let numbered = nodes.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
+        let condensed: Condensed = try await structured(
+            model: fastModel,
+            fast: true,
+            instructions: instructions,
+            input: numbered,
+            schemaName: "node_labels",
+            schema: schema
+        )
+        guard condensed.labels.count == nodes.count else {
+            throw ClientError.emptyOutput
+        }
+        return condensed.labels
     }
 
     /// HarknessAI: classifies one teacher utterance into a coaching move.

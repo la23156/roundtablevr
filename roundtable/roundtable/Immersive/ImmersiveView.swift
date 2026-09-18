@@ -310,59 +310,87 @@ struct SessionHUDView: View {
         return appModel.sessionConfig?.topic.title ?? "Roundtable"
     }
 
-    /// HarknessAI training row: tension meter, guideflow checklist, talk
-    /// ratio, and transient move feedback.
+    /// HarknessAI training rows: score, tension meter, guideflow checklist,
+    /// talk ratio, move feedback, and the coach's whisper.
     @ViewBuilder
     private func harknessStrip(controller: SessionController) -> some View {
-        HStack(spacing: 14) {
-            // Silence Tension Meter (appears only during a stall).
-            if let tension = controller.tensionProgress {
-                HStack(spacing: 6) {
-                    Image(systemName: "waveform.slash")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                    ProgressView(value: tension)
-                        .progressViewStyle(.linear)
-                        .tint(tension >= 1 ? .green : .orange)
-                        .frame(width: 130)
-                    Text("hold the silence")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 14) {
+                // Running score.
+                if let stats = controller.harknessStats {
+                    Label("\(stats.score)", systemImage: "star.fill")
+                        .font(.caption.weight(.bold).monospacedDigit())
+                        .foregroundStyle(stats.score >= 0 ? .yellow : .red)
                 }
-            }
 
-            // Guideflow tracker: one dot per realization node.
-            if let setup = appModel.sessionConfig?.mode.harknessSetup,
-               let stats = controller.harknessStats {
-                HStack(spacing: 5) {
-                    ForEach(1...setup.realizationNodes.count, id: \.self) { i in
-                        Image(systemName: stats.nodesCovered.contains(i)
-                              ? "circle.fill" : "circle.dotted")
+                // Silence Tension Meter (appears only during a stall).
+                if let tension = controller.tensionProgress {
+                    HStack(spacing: 6) {
+                        Image(systemName: "waveform.slash")
                             .font(.caption)
-                            .foregroundStyle(stats.nodesCovered.contains(i) ? .yellow : .secondary)
+                            .foregroundStyle(.orange)
+                        ProgressView(value: tension)
+                            .progressViewStyle(.linear)
+                            .tint(tension >= 1 ? .green : .orange)
+                            .frame(width: 130)
+                        Text("hold the silence")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
-                // Live teacher talk-time share (target: under ~15%).
-                let ratio = Int(stats.teacherTalkRatio * 100)
-                Text("you: \(ratio)%")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(stats.teacherTalkRatio > 0.15 ? .red : .green)
+                // Guideflow tracker: one dot per realization node; the one
+                // the class is closing in on pulses amber.
+                if let setup = appModel.sessionConfig?.mode.harknessSetup,
+                   let stats = controller.harknessStats {
+                    HStack(spacing: 5) {
+                        ForEach(1...setup.realizationNodes.count, id: \.self) { i in
+                            Image(systemName: stats.nodesCovered.contains(i)
+                                  ? "circle.fill"
+                                  : controller.closingInOn == i ? "circle.circle.fill" : "circle.dotted")
+                                .font(.caption)
+                                .foregroundStyle(stats.nodesCovered.contains(i) ? .yellow
+                                                 : controller.closingInOn == i ? .orange : .secondary)
+                        }
+                    }
+                    if let closing = controller.closingInOn {
+                        Text("closing in on №\(closing)")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.orange)
+                    }
+
+                    // Live teacher talk-time share (target: under ~15%).
+                    let ratio = Int(stats.teacherTalkRatio * 100)
+                    Text("you: \(ratio)%")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(stats.teacherTalkRatio > 0.15 ? .red : .green)
+                }
+
+                // Move feedback flash.
+                if let flash = controller.harknessFlash {
+                    Text(flash.text)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(flash.positive ? .green : .red)
+                        .lineLimit(1)
+                        .transition(.opacity)
+                        .id(flash.id)
+                }
+                Spacer(minLength: 0)
             }
 
-            // Move feedback flash.
-            if let flash = controller.harknessFlash {
-                Text(flash.text)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(flash.positive ? .green : .red)
+            // The coach's whisper: what a good facilitator might do right now.
+            if let hint = controller.coachHint {
+                Label(hint, systemImage: "lightbulb.fill")
+                    .font(.caption2.italic())
+                    .foregroundStyle(.cyan)
                     .lineLimit(1)
                     .transition(.opacity)
-                    .id(flash.id)
             }
-            Spacer(minLength: 0)
         }
         .animation(.easeInOut(duration: 0.25), value: controller.harknessFlash)
         .animation(.easeInOut(duration: 0.25), value: controller.tensionProgress == nil)
+        .animation(.easeInOut(duration: 0.25), value: controller.coachHint)
+        .animation(.easeInOut(duration: 0.25), value: controller.closingInOn)
     }
 
     /// "◀ Page N/M ▶" — flips the page on the presentation board.
