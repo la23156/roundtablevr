@@ -72,6 +72,45 @@ struct OpenAIClient {
         )
     }
 
+    /// HarknessAI: drafts 3-5 realization nodes for a training run from the
+    /// uploaded text. `guidance` is the teacher's optional steer ("focus on
+    /// the unreliable narration", "financials only") — empty means the model
+    /// picks the richest discussion targets itself.
+    func suggestRealizationNodes(documentText: String, guidance: String) async throws -> [String] {
+        let schema: [String: Any] = [
+            "type": "object",
+            "properties": [
+                "nodes": [
+                    "type": "array",
+                    "items": ["type": "string"],
+                    "minItems": 3,
+                    "maxItems": 5,
+                ],
+            ],
+            "required": ["nodes"],
+            "additionalProperties": false,
+        ]
+        let instructions = """
+        You help a teacher prepare a Harkness discussion. From the class text, propose 3-5 \
+        "realization nodes": the core conclusions or understandings a class of students should \
+        reach BY THEMSELVES through discussion. Good nodes are non-obvious but reachable, arguable \
+        from evidence in the text, and specific to THIS text — never generic ("the text has themes"). \
+        Write each as one plain sentence a teacher would recognize the moment a student lands on it. \
+        Order them in the sequence a discussion would naturally reach them.\
+        \(guidance.isEmpty ? "" : "\n\nTHE TEACHER'S STEER (follow it): \(guidance)")
+        """
+        struct Suggestion: Decodable { let nodes: [String] }
+        let suggestion: Suggestion = try await structured(
+            model: fastModel,
+            fast: true,
+            instructions: instructions,
+            input: "CLASS TEXT (may be truncated):\n\(documentText.prefix(60000))",
+            schemaName: "realization_nodes",
+            schema: schema
+        )
+        return suggestion.nodes
+    }
+
     /// HarknessAI: classifies one teacher utterance into a coaching move.
     /// Runs on the fast model, in parallel with the reply generation — the
     /// result only feeds scoring and the HUD, never blocks the conversation.

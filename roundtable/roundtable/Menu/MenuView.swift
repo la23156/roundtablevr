@@ -34,6 +34,9 @@ struct MenuView: View {
 
     // HarknessAI teacher-training mode.
     @State private var harknessNodes: [String] = ["", "", "", "", ""]
+    @State private var nodeSuggestionPrompt = ""
+    @State private var suggestingNodes = false
+    @State private var nodeSuggestionError: String?
 
     private var harknessSelected: Bool { selectedTopicID == "harkness" }
 
@@ -341,6 +344,39 @@ struct MenuView: View {
                 Text("3–5 understandings the class should reach on their own. You'll see them as orbs above the table — they turn gold when the students get there without you telling them.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                // Auto-suggest from the artifact (optional steer prompt).
+                HStack(spacing: 10) {
+                    TextField("Optional steer — e.g. \"focus on the narrator's blind spots\"",
+                              text: $nodeSuggestionPrompt)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.callout)
+                    Button {
+                        suggestNodes()
+                    } label: {
+                        if suggestingNodes {
+                            HStack(spacing: 6) {
+                                ProgressView().controlSize(.small)
+                                Text("Reading…")
+                            }
+                        } else {
+                            Label("Suggest nodes", systemImage: "wand.and.stars")
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(pendingDocument == nil || suggestingNodes)
+                }
+                if pendingDocument == nil {
+                    Text("Upload the artifact first and I can draft the nodes from it.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                if let nodeSuggestionError {
+                    Text(nodeSuggestionError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+
                 ForEach(0..<5, id: \.self) { i in
                     TextField(nodePlaceholder(i), text: $harknessNodes[i])
                         .textFieldStyle(.roundedBorder)
@@ -363,6 +399,30 @@ struct MenuView: View {
             }
             .padding(14)
             .background(RoundedRectangle(cornerRadius: 14).fill(Color.white.opacity(0.05)))
+        }
+    }
+
+    /// Drafts realization nodes from the uploaded artifact (fast model),
+    /// steered by the optional prompt. Results land in the editable fields.
+    private func suggestNodes() {
+        guard let doc = pendingDocument, !suggestingNodes else { return }
+        suggestingNodes = true
+        nodeSuggestionError = nil
+        let guidance = nodeSuggestionPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        Task {
+            do {
+                let nodes = try await OpenAIClient()
+                    .suggestRealizationNodes(documentText: doc.fullText, guidance: guidance)
+                guard pendingDocument === doc else { return }
+                for i in 0..<5 {
+                    harknessNodes[i] = i < nodes.count ? nodes[i] : ""
+                }
+                print("HARKNESS suggested nodes: \(nodes.joined(separator: " | "))")
+            } catch {
+                nodeSuggestionError = "Couldn't draft nodes: \(error.localizedDescription)"
+                print("HARKNESS node suggestion failed: \(error)")
+            }
+            suggestingNodes = false
         }
     }
 
