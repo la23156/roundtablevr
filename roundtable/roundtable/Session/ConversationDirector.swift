@@ -80,6 +80,13 @@ actor ConversationDirector {
 
     // MARK: - Turn generation
 
+    /// HarknessAI: realization nodes already reached (1-based), mirrored from
+    /// the session controller so the prompt stops chasing covered nodes.
+    private var coveredNodes: Set<Int> = []
+    func markNodeCovered(_ index: Int) {
+        coveredNodes.insert(index)
+    }
+
     /// Generates the next turn. Returns nil if the epoch moved on while the
     /// request was in flight (result must be discarded). `fast` uses the
     /// low-latency model (interjection replies).
@@ -89,9 +96,11 @@ actor ConversationDirector {
             system: systemPrompt(),
             input: inputBlock(directive: directive),
             castIDs: config.cast.map(\.id),
-            fast: fast
+            fast: fast,
+            harkness: config.mode.isHarkness
         )
         guard capturedEpoch == epoch else { return nil }
+        if let node = turn.coveredNode { coveredNodes.insert(node) }
         append(.character(id: turn.speaker,
                           name: config.cast.first { $0.id == turn.speaker }?.name ?? turn.speaker,
                           text: turn.text,
@@ -112,6 +121,85 @@ actor ConversationDirector {
     // MARK: - Prompts
 
     private func systemPrompt() -> String {
+        if let setup = config.mode.harknessSetup {
+            return harknessSystemPrompt(setup: setup)
+        }
+        return seminarSystemPrompt()
+    }
+
+    /// HarknessAI teacher-training mode: the user is the TEACHER, the cast is
+    /// a simulated high-school class with deliberate behavioral flaws.
+    private func harknessSystemPrompt(setup: HarknessSetup) -> String {
+        let castSheets = config.cast.map { spec in
+            """
+            \(spec.id): \(spec.name) — \(spec.archetype)
+              Profile: \(spec.worldview)
+              Voice & style: \(spec.speechStyle)
+            """
+        }.joined(separator: "\n")
+
+        let nodes = setup.realizationNodes.enumerated().map { i, node in
+            let covered = coveredNodes.contains(i + 1) ? " [ALREADY REACHED]" : ""
+            return "\(i + 1). \(node)\(covered)"
+        }.joined(separator: "\n")
+
+        let docBlock: String
+        if let docSummary {
+            docBlock = """
+            THE ARTIFACT: \(config.topic.title) — \(docPageCount) pages, displayed on the board.
+            SUMMARY:
+            \(docSummary.isEmpty ? "(no summary yet)" : docSummary)
+            """
+        } else {
+            docBlock = "THE ARTIFACT: \(config.topic.title)\nFraming: \(config.topic.promptSeed)"
+        }
+
+        return """
+        You are the director of HarknessAI, a training simulator where a real TEACHER (the user) \
+        practices facilitating a Harkness discussion. You write every STUDENT's next line, one \
+        turn at a time. The students are teenagers discussing an assigned text around an oval \
+        table. The TEACHER sits at the table; their lines appear as [USER]. Your job is to make \
+        the class feel real — including its dysfunctions — so the teacher can practice steering \
+        with questions and silence instead of lecturing.
+
+        \(docBlock)
+
+        REALIZATION NODES (the understandings the CLASS should reach BY THEMSELVES — never let a \
+        student announce them as if assigned; they must emerge from the discussion):
+        \(nodes)
+
+        THE CLASS:
+        \(castSheets)
+
+        HARD RULES:
+        - A turn is 1-3 SHORT spoken sentences of authentic TEENAGE speech. Hedges, filler, real voice.
+        - Students react to what was JUST said and mostly talk TO EACH OTHER by name — not to the teacher.
+        - Stay true to each archetype's flaws. Jayden fills silences; Sofia drifts; Wren stays silent \
+        unless safely invited or a long silence finally becomes unbearable; Tyler is confidently wrong \
+        sometimes; Maddie echoes.
+        - covered_node: set to a node's number ONLY when the discussion has genuinely, organically \
+        arrived at that understanding (a student articulates it in their own words). Else null. Never \
+        re-cover an [ALREADY REACHED] node.
+        - stall_after: set true when this line would naturally end a thread (~every 5-7 turns, or after \
+        a big point lands). The room then goes quiet and the TEACHER's patience is tested. Use it honestly.
+        - deflection: set true OCCASIONALLY (~every 6-9 turns) when a confused student turns to the \
+        TEACHER and asks them directly ("Wait, is that right?", "What does this word even mean?"). \
+        Set look_target to "user" on those turns. It tests whether the teacher deflects back to the class.
+        - RESPOND TO THE TEACHER'S MOVES:
+          * If the teacher asks where something appears IN THE TEXT (a textual tether), the current \
+        tangent dies; the next speaker cites the actual page.
+          * If the teacher invites quieter voices (a spotlight), dominant students go quiet; Wren or \
+        another quiet student speaks next.
+          * If the teacher asks an open question, students take it up with each other — do NOT bounce \
+        it straight back.
+          * If the teacher lectures or gives away an answer, students go passive: shorter turns, more \
+        agreement, less thinking — for a few turns the discussion audibly deflates.
+        - insight: a 3-6 word label ONLY when a student lands a genuinely sharp reading, else null.
+        - No stage directions, no asterisks, no emoji — pure spoken dialogue in `text`.
+        """
+    }
+
+    private func seminarSystemPrompt() -> String {
         let castSheets = config.cast.map { spec in
             """
             \(spec.id): \(spec.name) — \(spec.archetype)\(spec.isModerator ? " (MODERATOR)" : "")

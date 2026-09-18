@@ -85,6 +85,12 @@ final class LoadedAvatar {
 enum AvatarLoader {
     enum LoadError: Error { case missingResource(String) }
 
+    /// First-load cache so a cast can reuse a body (HarknessAI seats 8
+    /// students on 5 rigs). Later loads clone the cached entity — clones
+    /// carry their own component instances (skeleton poses, blend-shape
+    /// weights), so two copies animate independently.
+    @MainActor private static var cache: [String: Entity] = [:]
+
     /// Loads an avatar USDZ bundled directly in the app (AvatarAssets/<name>.usdz).
     ///
     /// Avatars deliberately bypass RealityKitContent: realitytool's .reality
@@ -93,11 +99,15 @@ enum AvatarLoader {
     @MainActor
     static func load(assetName: String) async throws -> LoadedAvatar {
         let name = assetName.components(separatedBy: "/").last ?? assetName
+        if let cached = cache[name] {
+            return LoadedAvatar(root: cached.clone(recursive: true))
+        }
         guard let url = Bundle.main.url(forResource: name, withExtension: "usdz") else {
             throw LoadError.missingResource(name)
         }
         let entity = try await Entity(contentsOf: url)
-        return LoadedAvatar(root: entity)
+        cache[name] = entity
+        return LoadedAvatar(root: entity.clone(recursive: true))
     }
 }
 

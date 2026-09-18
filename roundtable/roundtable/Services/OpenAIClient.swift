@@ -30,25 +30,35 @@ struct OpenAIClient {
 
     /// Generates the next roundtable turn as strict structured output.
     /// `fast` selects the low-latency model (used for interjection replies).
+    /// `harkness` adds the training-mode fields (stall/deflection/node).
     func generateTurn(
         system: String,
         input: String,
         castIDs: [String],
-        fast: Bool = false
+        fast: Bool = false,
+        harkness: Bool = false
     ) async throws -> DirectorTurn {
         let lookTargets = castIDs + ["user", "table"]
+        var properties: [String: Any] = [
+            "speaker": ["type": "string", "enum": castIDs],
+            "text": ["type": "string"],
+            "emotion": ["type": "string", "enum": Emotion.allCases.map(\.rawValue)],
+            "look_target": ["type": "string", "enum": lookTargets],
+            "gesture": ["type": "string", "enum": Gesture.allCases.map(\.rawValue)],
+            "insight": ["type": ["string", "null"]],
+            "invites_user": ["type": "boolean"],
+        ]
+        var required = ["speaker", "text", "emotion", "look_target", "gesture", "insight", "invites_user"]
+        if harkness {
+            properties["stall_after"] = ["type": "boolean"]
+            properties["deflection"] = ["type": "boolean"]
+            properties["covered_node"] = ["type": ["integer", "null"]]
+            required += ["stall_after", "deflection", "covered_node"]
+        }
         let schema: [String: Any] = [
             "type": "object",
-            "properties": [
-                "speaker": ["type": "string", "enum": castIDs],
-                "text": ["type": "string"],
-                "emotion": ["type": "string", "enum": Emotion.allCases.map(\.rawValue)],
-                "look_target": ["type": "string", "enum": lookTargets],
-                "gesture": ["type": "string", "enum": Gesture.allCases.map(\.rawValue)],
-                "insight": ["type": ["string", "null"]],
-                "invites_user": ["type": "boolean"],
-            ],
-            "required": ["speaker", "text", "emotion", "look_target", "gesture", "insight", "invites_user"],
+            "properties": properties,
+            "required": required,
             "additionalProperties": false,
         ]
 
@@ -62,9 +72,46 @@ struct OpenAIClient {
         )
     }
 
+    /// HarknessAI: classifies one teacher utterance into a coaching move.
+    /// Runs on the fast model, in parallel with the reply generation — the
+    /// result only feeds scoring and the HUD, never blocks the conversation.
+    func classifyTeacherMove(text: String, pendingDeflection: Bool) async throws -> TeacherMove {
+        let schema: [String: Any] = [
+            "type": "object",
+            "properties": [
+                "move": ["type": "string", "enum": TeacherMove.allCases.map(\.rawValue)],
+            ],
+            "required": ["move"],
+            "additionalProperties": false,
+        ]
+        let instructions = """
+        You score one utterance by a TEACHER practicing Harkness discussion facilitation. \
+        Classify it as exactly one move:
+        - textual_tether: pushes students back to the text ("where do you see that in the text?").
+        - spotlight: invites quieter voices ("let's hear from someone who hasn't spoken yet").
+        - open_question: a genuine open question to the table that hands students the thinking.
+        - redirect: deflects a student's direct question back to the class instead of answering it.
+        - lecture: explains content, gives away an answer, corrects a student directly, or otherwise \
+        does the students' thinking for them\(pendingDeflection ? " — especially if it answers the question a student just asked the teacher" : "").
+        - other: none of the above (logistics, encouragement, small talk).
+        """
+        struct Verdict: Decodable { let move: TeacherMove }
+        let verdict: Verdict = try await structured(
+            model: fastModel,
+            fast: true,
+            instructions: instructions,
+            input: "TEACHER SAID: \"\(text)\"",
+            schemaName: "teacher_move",
+            schema: schema
+        )
+        return verdict.move
+    }
+
     /// One-shot document briefing for "discuss a PDF" mode: a ~300-token
     /// summary plus 3-6 searchable entities for the fresh-facts web search.
-    func summarizeDocument(text: String) async throws -> (summary: String, entities: [String]) {
+    /// `forTraining` switches from investor framing to classroom framing
+    /// (HarknessAI: the document is a class text, not a pitch deck).
+    func summarizeDocument(text: String, forTraining: Bool = false) async throws -> (summary: String, entities: [String]) {
         let schema: [String: Any] = [
             "type": "object",
             "properties": [
@@ -74,7 +121,13 @@ struct OpenAIClient {
             "required": ["summary", "entities"],
             "additionalProperties": false,
         ]
-        let instructions = """
+        let instructions = forTraining ? """
+        You prepare a teacher's crib sheet for a class text that a Harkness seminar of students is \
+        about to discuss. Write a tight ~300-token summary: what the text is, its central themes and \
+        tensions, the key evidence or passages, its genuine ambiguities (the places a good discussion \
+        will live), and any common misreadings students might fall into. Then list 3-6 key searchable \
+        entities (authors, works, events, concepts) for optional background context.
+        """ : """
         You prepare briefing notes for a panel of investors about to discuss an uploaded \
         document (usually an investment or pitch deck). Write a tight ~300-token summary: what the \
         document is, the core thesis or ask, the key numbers (market size, revenue, raise, valuation \

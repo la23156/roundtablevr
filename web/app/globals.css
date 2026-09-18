@@ -1765,3 +1765,35 @@ body {
   box-shadow: 0 0 34px rgba(80, 220, 120, 0.25);
   margin-bottom: 18px;
 }
+
+/* ===================== HarknessAI landing ===================== */
+
+.hk-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 12px;
+  border: 1px solid var(--wood-edge);
+  background: linear-gradient(180deg, var(--wood-panel), var(--wood));
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+
+.hk-archetype-name {
+  font-family: var(--serif);
+  color: var(--amber-soft);
+  font-size: 1.02rem;
+  margin-bottom: 3px;
+}
+
+.hk-archetype-name span {
+  color: var(--ink-dim);
+  font-size: 0.85rem;
+}
+
+.hk-archetype p {
+  margin: 0;
+  color: var(--parchment-dim);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}

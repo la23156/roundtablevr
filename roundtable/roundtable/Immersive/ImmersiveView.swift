@@ -267,33 +267,102 @@ struct SessionHUDView: View {
     var onLeave: () -> Void
 
     var body: some View {
-        HStack(spacing: 16) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(appModel.sessionConfig?.topic.title ?? "Roundtable")
-                    .font(.system(.headline, design: .serif))
-                    .lineLimit(1)
-                Text("Speak any time — or just look at someone.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+        VStack(spacing: 10) {
+            if let controller = appModel.sessionController, controller.isHarkness {
+                harknessStrip(controller: controller)
             }
-            if let controller = appModel.sessionController, let doc = controller.document,
-               !controller.isReplicaSession {   // only the host flips pages
-                pageControls(controller: controller, doc: doc)
-            }
-            if appModel.groupCoordinator.sessionActive {
-                Label("\(appModel.groupCoordinator.participantCount)", systemImage: "person.2.fill")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-            Button(role: .destructive, action: onLeave) {
-                Label("Leave", systemImage: "door.left.hand.open")
-                    .labelStyle(.titleAndIcon)
-                    .font(.callout)
+            HStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(hudTitle)
+                        .font(.system(.headline, design: .serif))
+                        .lineLimit(1)
+                    Text(appModel.sessionController?.isHarkness == true
+                         ? "Guide with questions and silence — not answers."
+                         : "Speak any time — or just look at someone.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                if let controller = appModel.sessionController, let doc = controller.document,
+                   !controller.isReplicaSession {   // only the host flips pages
+                    pageControls(controller: controller, doc: doc)
+                }
+                if appModel.groupCoordinator.sessionActive {
+                    Label("\(appModel.groupCoordinator.participantCount)", systemImage: "person.2.fill")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Button(role: .destructive, action: onLeave) {
+                    Label("Leave", systemImage: "door.left.hand.open")
+                        .labelStyle(.titleAndIcon)
+                        .font(.callout)
+                }
             }
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
         .glassBackgroundEffect()
+    }
+
+    private var hudTitle: String {
+        if appModel.sessionController?.isHarkness == true {
+            return "HarknessAI — \(appModel.sessionConfig?.topic.title ?? "Training")"
+        }
+        return appModel.sessionConfig?.topic.title ?? "Roundtable"
+    }
+
+    /// HarknessAI training row: tension meter, guideflow checklist, talk
+    /// ratio, and transient move feedback.
+    @ViewBuilder
+    private func harknessStrip(controller: SessionController) -> some View {
+        HStack(spacing: 14) {
+            // Silence Tension Meter (appears only during a stall).
+            if let tension = controller.tensionProgress {
+                HStack(spacing: 6) {
+                    Image(systemName: "waveform.slash")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    ProgressView(value: tension)
+                        .progressViewStyle(.linear)
+                        .tint(tension >= 1 ? .green : .orange)
+                        .frame(width: 130)
+                    Text("hold the silence")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            // Guideflow tracker: one dot per realization node.
+            if let setup = appModel.sessionConfig?.mode.harknessSetup,
+               let stats = controller.harknessStats {
+                HStack(spacing: 5) {
+                    ForEach(1...setup.realizationNodes.count, id: \.self) { i in
+                        Image(systemName: stats.nodesCovered.contains(i)
+                              ? "circle.fill" : "circle.dotted")
+                            .font(.caption)
+                            .foregroundStyle(stats.nodesCovered.contains(i) ? .yellow : .secondary)
+                    }
+                }
+
+                // Live teacher talk-time share (target: under ~15%).
+                let ratio = Int(stats.teacherTalkRatio * 100)
+                Text("you: \(ratio)%")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(stats.teacherTalkRatio > 0.15 ? .red : .green)
+            }
+
+            // Move feedback flash.
+            if let flash = controller.harknessFlash {
+                Text(flash.text)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(flash.positive ? .green : .red)
+                    .lineLimit(1)
+                    .transition(.opacity)
+                    .id(flash.id)
+            }
+            Spacer(minLength: 0)
+        }
+        .animation(.easeInOut(duration: 0.25), value: controller.harknessFlash)
+        .animation(.easeInOut(duration: 0.25), value: controller.tensionProgress == nil)
     }
 
     /// "◀ Page N/M ▶" — flips the page on the presentation board.

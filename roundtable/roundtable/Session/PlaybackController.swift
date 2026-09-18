@@ -71,11 +71,34 @@ final class PlaybackController {
     /// User head position provider for look-at (falls back to seated origin).
     var userHead: () -> SIMD3<Float> = { SIMD3<Float>(0, 1.2, 0) }
 
-    private var nextDirective = "Session start: the moderator opens with one warm line welcoming the table, then poses tonight's question."
+    // MARK: HarknessAI training mode
+
+    /// Fired when a turn marked stall_after finishes: the room goes quiet and
+    /// the teacher's silence discipline is tested. Playback does NOT schedule
+    /// the next turn until resumeAfterStall / interject.
+    var onStall: (() -> Void)?
+    /// True while a stall is holding the floor open.
+    private(set) var stalled = false
+    private var currentTurnStalls = false
+    /// Debug (-harknessTest): force the next played turn to stall so the
+    /// tension-meter loop can be verified deterministically in the simulator.
+    var debugForceStallNextTurn = false
+    private var isHarkness: Bool { config.mode.isHarkness }
+
+    private var nextDirective: String
+
+    private var steadyStateDirective: String {
+        config.mode.isHarkness
+            ? "The teacher is silent. The students continue among themselves — build on, question, or push back against what was just said, true to each archetype."
+            : "The user is listening silently; continue the discussion naturally between characters. Build on or push back against the last point."
+    }
 
     init(config: SessionConfig, director: ConversationDirector) {
         self.config = config
         self.director = director
+        self.nextDirective = config.mode.isHarkness
+            ? "Session start: the class has just settled with the text in front of them. The teacher hasn't spoken. One student (not the Ghost) opens with a first impression of the text."
+            : "Session start: the moderator opens with one warm line welcoming the table, then poses tonight's question."
     }
 
     func register(_ character: CharacterEntity) {
@@ -122,7 +145,7 @@ final class PlaybackController {
                 let directive = nextDirective
                 let fast = nextTurnIsFast
                 nextTurnIsFast = false
-                nextDirective = "The user is listening silently; continue the discussion naturally between characters. Build on or push back against the last point."
+                nextDirective = steadyStateDirective
                 let llmStart = CACurrentMediaTime()
                 guard let (turn, epoch) = try await director.generateNextTurn(directive: directive, fast: fast) else { continue }
                 let llmDone = CACurrentMediaTime()
@@ -173,6 +196,12 @@ final class PlaybackController {
             return
         }
         playing = true
+        stalled = false
+        currentTurnStalls = isHarkness && (prepared.turn.stallAfter == true || debugForceStallNextTurn)
+        if debugForceStallNextTurn {
+            debugForceStallNextTurn = false
+            print("HARKNESS debug: forcing stall after this turn")
+        }
         currentSpeakerID = speaker.spec.id
         currentTurnID = prepared.id
         onTurnStarted?(prepared.id)
@@ -264,8 +293,32 @@ final class PlaybackController {
         gem.attach(to: nil)
         idleGazes()
         guard !isReplica else { return }   // the host's turnStart drives replicas
+        if currentTurnStalls {
+            // HarknessAI: the room goes dead quiet. Nobody speaks until the
+            // tension resolves (SessionController owns the timer) or the
+            // teacher breaks the silence (an ordinary interjection).
+            currentTurnStalls = false
+            stalled = true
+            onStall?()
+            return
+        }
         let gap = Double.random(in: 0.3...1.0) * config.settings.paceMultiplier
         playNextWhenReady(afterGap: gap)
+    }
+
+    /// HarknessAI: the stall resolved WITHOUT the teacher speaking — the
+    /// discomfort finally forced a student to take ownership of the lull.
+    /// Buffered turns predate the silence, so they're discarded and the next
+    /// turn is generated against the outcome.
+    func resumeAfterStall(directive: String) {
+        guard stalled else { return }
+        stalled = false
+        buffer.removeAll()
+        fillTask?.cancel()
+        fillTask = nil
+        nextDirective = directive
+        startGenerating()
+        playNextWhenReady(afterGap: 0.2)
     }
 
     // MARK: - Replica feed (SharePlay: turns arrive from the host)
@@ -372,6 +425,7 @@ final class PlaybackController {
     /// The user said something: everyone reacts, the addressed (or most
     /// relevant) character answers first, and stale prepared turns are gone.
     func interject(text: String, facedName: String?) {
+        stalled = false
         buffer.removeAll()
         interjectedAt = CACurrentMediaTime()
         nextTurnIsFast = true
@@ -379,7 +433,16 @@ final class PlaybackController {
         // instead of after the doomed request completes.
         fillTask?.cancel()
         fillTask = nil
-        if let facedName {
+        if isHarkness {
+            let facing = facedName.map { " while looking at \($0)" } ?? ""
+            nextDirective = """
+            The TEACHER just said\(facing): "\(text)". Respond as the class per the RESPOND TO THE \
+            TEACHER'S MOVES rules: a textual tether kills the tangent and sends everyone to the page; \
+            a spotlight brings out a quiet student (the Ghost, if it feels safe); an open question gets \
+            taken up between students; a lecture deflates the room. If the teacher addressed a specific \
+            student, that student reacts first.
+            """
+        } else if let facedName {
             nextDirective = "The user just spoke directly to \(facedName) (they were facing them): \"\(text)\". \(facedName) responds first, addressing the user as 'you'. Others may chime in after."
         } else {
             nextDirective = "The user just said: \"\(text)\". Whoever is most relevant responds first, addressing the user directly as 'you'."

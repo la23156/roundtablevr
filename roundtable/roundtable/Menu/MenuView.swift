@@ -32,11 +32,25 @@ struct MenuView: View {
     @State private var pendingDocument: DiscussionDocument?
     @State private var documentPhase: DocumentPhase = .idle
 
+    // HarknessAI teacher-training mode.
+    @State private var harknessNodes: [String] = ["", "", "", "", ""]
+
+    private var harknessSelected: Bool { selectedTopicID == "harkness" }
+
+    private var validHarknessNodes: [String] {
+        harknessNodes.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
     private var documentIsSelected: Bool {
-        selectedTopicID == "pdf" && pendingDocument != nil
+        (selectedTopicID == "pdf" || harknessSelected) && pendingDocument != nil
     }
 
     private var selectedTopic: TopicCard? {
+        if harknessSelected {
+            guard let doc = pendingDocument else { return nil }
+            return .custom(doc.title)
+        }
         if documentIsSelected, let doc = pendingDocument {
             return .custom("\(doc.title) — investment discussion")
         }
@@ -52,8 +66,14 @@ struct MenuView: View {
     }
 
     private var canEnter: Bool {
-        selectedTopic != nil && castIsValid && appModel.phase == .menu
-            && appModel.immersiveSpaceState == .closed
+        guard appModel.phase == .menu, appModel.immersiveSpaceState == .closed else { return false }
+        if harknessSelected {
+            // Training runs need the artifact + 3-5 realization nodes; the
+            // class roster is generated, so the cast picker doesn't apply.
+            return pendingDocument != nil && documentPhase == .ready
+                && (3...5).contains(validHarknessNodes.count)
+        }
+        return selectedTopic != nil && castIsValid
             && (!documentIsSelected || documentPhase == .ready)
     }
 
@@ -62,7 +82,11 @@ struct MenuView: View {
             VStack(alignment: .leading, spacing: 28) {
                 header
                 topicSection
-                castSection
+                if harknessSelected {
+                    harknessSection
+                } else {
+                    castSection
+                }
                 settingsSection
                 shareSection
                 enterSection
@@ -92,7 +116,9 @@ struct MenuView: View {
             if args.contains("-rtMessageTest") {
                 RTMessageSelfTest.run()
             }
-            if args.contains("-pdfTest") {
+            if args.contains("-harknessTest") {
+                runHarknessTest()
+            } else if args.contains("-pdfTest") {
                 runPDFTest()
             } else if args.contains("-autoEnter") {
                 enterRoundtable()
@@ -174,6 +200,35 @@ struct MenuView: View {
         }
     }
 
+    /// `-harknessTest`: HarknessAI training run against the bundled sample
+    /// deck with canned realization nodes (simulator verification).
+    private func runHarknessTest() {
+        guard appModel.phase == .menu, appModel.sessionController == nil,
+              pendingDocument == nil else { return }
+        guard let url = Bundle.main.url(forResource: "SamplePitch", withExtension: "pdf") else {
+            print("HARKNESS-TEST: SamplePitch.pdf missing from bundle")
+            return
+        }
+        selectedTopicID = "harkness"
+        harknessNodes = [
+            "The company's real moat is regulatory, not technical",
+            "The revenue projections assume a customer that doesn't exist yet",
+            "The team slide is stronger than the product slide",
+            "", "",
+        ]
+        print("HARKNESS-TEST: loading bundled sample text")
+        loadDocument(from: url, securityScoped: false)
+        // loadDocument's summarize completion auto-enters for -pdfTest only;
+        // mirror that here once the briefing is ready.
+        Task {
+            while documentPhase != .ready {
+                if case .failed = documentPhase { return }
+                try? await Task.sleep(for: .milliseconds(300))
+            }
+            enterRoundtable()
+        }
+    }
+
     /// `-pdfTest`: full document flow against the bundled sample deck.
     private func runPDFTest() {
         guard appModel.phase == .menu, appModel.sessionController == nil,
@@ -203,6 +258,7 @@ struct MenuView: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 14) {
+                    harknessTopicCard
                     pdfTopicCard
                     ForEach(TopicDeck.presets) { card in
                         TopicCardView(card: card, isSelected: selectedTopicID == card.id)
@@ -213,6 +269,111 @@ struct MenuView: View {
                 .padding(.vertical, 4)
             }
         }
+    }
+
+    private var harknessTopicCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("🎓").font(.system(size: 30))
+            Text("HarknessAI")
+                .font(.system(.headline, design: .serif))
+            Text("Teacher training: guide a simulated class of 8 students through a Harkness discussion using only questions and silence.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .padding(16)
+        .frame(width: 230, height: 150, alignment: .topLeading)
+        .background(
+            RoundedRectangle(cornerRadius: 18)
+                .fill(harknessSelected ? Color.green.opacity(0.18) : Color.white.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18)
+                .strokeBorder(harknessSelected ? Color.green : .clear, lineWidth: 2)
+        )
+        .onTapGesture { selectedTopicID = "harkness" }
+        .hoverEffect()
+    }
+
+    /// HarknessAI setup: the artifact (PDF), the guideflow (realization
+    /// nodes), and the generated class.
+    private var harknessSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Training Setup")
+                .font(.system(.title2, design: .serif).weight(.semibold))
+
+            // 1. The artifact.
+            HStack(spacing: 12) {
+                Image(systemName: "doc.text")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(pendingDocument?.title ?? "Upload the artifact")
+                        .font(.headline)
+                    switch documentPhase {
+                    case .idle:
+                        Text("The reading, historical document, or case study your class will discuss.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    case .summarizing:
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("Reading the text…").font(.caption).foregroundStyle(.secondary)
+                        }
+                    case .ready:
+                        Text("\(pendingDocument?.pageCount ?? 0) pages · the class has done the reading")
+                            .font(.caption).foregroundStyle(.secondary)
+                    case .failed(let message):
+                        Text(message).font(.caption).foregroundStyle(.red)
+                    }
+                }
+                Spacer()
+                Button(pendingDocument == nil ? "Choose PDF…" : "Change PDF…") {
+                    showingPDFImporter = true
+                }
+            }
+            .padding(14)
+            .background(RoundedRectangle(cornerRadius: 14).fill(Color.white.opacity(0.05)))
+
+            // 2. The guideflow.
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Realization Nodes")
+                    .font(.headline)
+                Text("3–5 understandings the class should reach on their own. You'll see them as orbs above the table — they turn gold when the students get there without you telling them.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ForEach(0..<5, id: \.self) { i in
+                    TextField(nodePlaceholder(i), text: $harknessNodes[i])
+                        .textFieldStyle(.roundedBorder)
+                        .font(.callout)
+                }
+            }
+            .padding(14)
+            .background(RoundedRectangle(cornerRadius: 14).fill(Color.white.opacity(0.05)))
+
+            // 3. The class.
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Your Class")
+                    .font(.headline)
+                Text("Eight students take their seats — including a Monopolizer who fills every silence, a Tangent Weaver, a silent Ghost who knows the answers, one confidently incorrect voice, and an Echo. Their flaws are the training.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("In the room: hold silences until a student cracks (the tension bar rewards patience), deflect \"is that right?\" back to the table, ask \"where do you see that in the text?\" to kill tangents, and keep your talk-time under 15%.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(14)
+            .background(RoundedRectangle(cornerRadius: 14).fill(Color.white.opacity(0.05)))
+        }
+    }
+
+    private func nodePlaceholder(_ i: Int) -> String {
+        [
+            "e.g. The narrator can't be trusted — the story contradicts him",
+            "e.g. The setting mirrors the protagonist's state of mind",
+            "e.g. The 'villain' is following the same logic as the hero",
+            "Optional fourth realization…",
+            "Optional fifth realization…",
+        ][i]
     }
 
     private var pdfTopicCard: some View {
@@ -280,13 +441,14 @@ struct MenuView: View {
             return
         }
         pendingDocument = doc
-        selectedTopicID = "pdf"
+        if !harknessSelected { selectedTopicID = "pdf" }
         documentPhase = .summarizing
         print("PDF: loaded \"\(doc.title)\" — \(doc.pageCount) pages")
 
         Task {
             do {
-                let (summary, entities) = try await OpenAIClient().summarizeDocument(text: doc.fullText)
+                let (summary, entities) = try await OpenAIClient()
+                    .summarizeDocument(text: doc.fullText, forTraining: harknessSelected)
                 // The user may have picked a different PDF while we summarized.
                 guard pendingDocument === doc else { return }
                 doc.docSummary = summary
@@ -417,11 +579,24 @@ struct MenuView: View {
         // starts, which re-fires onAppear — never start a second session.
         guard appModel.phase == .menu, appModel.sessionController == nil,
               let topic = selectedTopic else { return }
-        let cast = appModel.characterStore.all.filter { appModel.selectedCastIDs.contains($0.id) }
-        let document = documentIsSelected ? pendingDocument : nil
-        document?.currentPageIndex = 0
-        let config = SessionConfig(topic: topic, cast: cast, settings: settings,
+        let config: SessionConfig
+        let document: DiscussionDocument?
+        if harknessSelected {
+            // HarknessAI: the class roster is generated; the teacher (user)
+            // moderates by definition.
+            document = pendingDocument
+            document?.currentPageIndex = 0
+            let setup = HarknessSetup(realizationNodes: validHarknessNodes)
+            config = SessionConfig(topic: topic, cast: HarknessStudents.roster(),
+                                   settings: settings, document: document?.info,
+                                   mode: .harkness(setup))
+        } else {
+            let cast = appModel.characterStore.all.filter { appModel.selectedCastIDs.contains($0.id) }
+            document = documentIsSelected ? pendingDocument : nil
+            document?.currentPageIndex = 0
+            config = SessionConfig(topic: topic, cast: cast, settings: settings,
                                    document: document?.info)
+        }
 
         appModel.beginSession(config: config, document: document)
         appModel.immersiveSpaceState = .inTransition

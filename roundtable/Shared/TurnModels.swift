@@ -28,10 +28,52 @@ struct DirectorTurn: Codable, Equatable {
     let insight: String?
     let invitesUser: Bool
 
+    // HarknessAI training mode only (absent -> nil in classic seminars).
+    /// The room goes dead quiet after this line; the teacher's silence
+    /// discipline is being tested (tension meter).
+    var stallAfter: Bool?
+    /// This line is a deflection test: the student turns to the TEACHER and
+    /// asks them directly ("Is that right?"). Answering it = lecturing.
+    var deflection: Bool?
+    /// 1-based realization-node index the class just organically reached.
+    var coveredNode: Int?
+
     enum CodingKeys: String, CodingKey {
         case speaker, text, emotion, gesture, insight
         case lookTarget = "look_target"
         case invitesUser = "invites_user"
+        case stallAfter = "stall_after"
+        case deflection
+        case coveredNode = "covered_node"
+    }
+
+    init(speaker: String, text: String, emotion: Emotion, lookTarget: String,
+         gesture: Gesture, insight: String?, invitesUser: Bool,
+         stallAfter: Bool? = nil, deflection: Bool? = nil, coveredNode: Int? = nil) {
+        self.speaker = speaker
+        self.text = text
+        self.emotion = emotion
+        self.lookTarget = lookTarget
+        self.gesture = gesture
+        self.insight = insight
+        self.invitesUser = invitesUser
+        self.stallAfter = stallAfter
+        self.deflection = deflection
+        self.coveredNode = coveredNode
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        speaker = try c.decode(String.self, forKey: .speaker)
+        text = try c.decode(String.self, forKey: .text)
+        emotion = try c.decode(Emotion.self, forKey: .emotion)
+        lookTarget = try c.decode(String.self, forKey: .lookTarget)
+        gesture = try c.decode(Gesture.self, forKey: .gesture)
+        insight = try c.decodeIfPresent(String.self, forKey: .insight)
+        invitesUser = try c.decode(Bool.self, forKey: .invitesUser)
+        stallAfter = try c.decodeIfPresent(Bool.self, forKey: .stallAfter)
+        deflection = try c.decodeIfPresent(Bool.self, forKey: .deflection)
+        coveredNode = try c.decodeIfPresent(Int.self, forKey: .coveredNode)
     }
 }
 

@@ -8,6 +8,8 @@ web/.env*
 .DS_Store
 xcuserdata/
 *.xcuserstate
+# Local archives/exports (contain the bundled Secrets.plist)
+archivebuilds/
 
 # Web build artifacts
 web/node_modules/

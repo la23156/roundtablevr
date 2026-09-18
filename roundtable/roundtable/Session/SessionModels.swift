@@ -27,6 +27,9 @@ struct SessionConfig {
     /// this document (summary + per-page text); the live PDFKit handle lives
     /// on AppModel/SessionController, not here.
     var document: DiscussionDocumentInfo?
+    /// `.seminar` (classic roundtable) or `.harkness` (HarknessAI teacher
+    /// training: the user is the teacher, the cast is a simulated class).
+    var mode: SessionMode = .seminar
 
     var moderator: CharacterSpec? { cast.first(where: \.isModerator) }
 }
@@ -50,4 +53,6 @@ struct SessionRecap {
     var insights: [Insight]
     var transcript: [TranscriptLine]
     var durationMinutes: Int
+    /// HarknessAI training sessions only: the teacher's performance debrief.
+    var harknessDebrief: HarknessDebrief?
 }

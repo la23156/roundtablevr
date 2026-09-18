@@ -62,6 +62,35 @@ final class SessionController {
     }
     private(set) var subtitle: Subtitle?
 
+    // MARK: - HarknessAI training state (nil outside .harkness mode)
+
+    /// Live scoring, observed by the HUD.
+    private(set) var harknessStats: HarknessStats?
+    /// 0-1 fill of the Silence Tension Meter; nil = no stall in progress.
+    private(set) var tensionProgress: Double?
+    /// Transient HUD banner ("Lecturing Penalty", "Silence held", …).
+    struct HarknessFlash: Equatable {
+        let id: UUID
+        let text: String
+        let positive: Bool
+    }
+    private(set) var harknessFlash: HarknessFlash?
+
+    var isHarkness: Bool { config.mode.isHarkness }
+    @ObservationIgnored private var harknessOverlay: HarknessOverlay?
+    @ObservationIgnored private var stallStartedAt: Double?
+    /// Seconds the teacher must hold a dead silence before it pays off.
+    @ObservationIgnored private let tensionDuration: Double = 10
+    /// A student just asked the TEACHER directly; the teacher's next line is
+    /// judged (deflect = pass, answer = Lecturing Penalty).
+    @ObservationIgnored private var pendingDeflection: (studentID: String, at: Date)?
+    /// "teacher" or a student id — tail of the conversation web.
+    @ObservationIgnored private var lastSpeakerKey: String?
+    @ObservationIgnored private var currentTurnAudioStart: Double?
+    @ObservationIgnored private var currentTurnSpeakerID: String?
+    @ObservationIgnored private var teacherSpeechStartedAt: Double?
+    @ObservationIgnored private var flashClearTask: Task<Void, Never>?
+
     /// Characters that recently acknowledged the user's gaze (cooldowns).
     @ObservationIgnored private var lastAcknowledged: [String: Double] = [:]
     @ObservationIgnored private var faceStart: (id: String, since: Double)?
@@ -110,12 +139,23 @@ final class SessionController {
             transcript.append(TranscriptLine(speakerName: name, text: turn.text, wasInterrupted: false))
         }
         playback.onTurnStart = { [weak self] turn in
-            guard let self, config.settings.subtitlesEnabled,
-                  let spec = config.cast.first(where: { $0.id == turn.speaker }) else { return }
-            subtitle = Subtitle(speakerName: spec.name, text: turn.text, tint: spec.tint)
+            guard let self else { return }
+            if config.settings.subtitlesEnabled,
+               let spec = config.cast.first(where: { $0.id == turn.speaker }) {
+                subtitle = Subtitle(speakerName: spec.name, text: turn.text, tint: spec.tint)
+            }
+            harknessTurnStarted(turn)
         }
         playback.onTurnEnd = { [weak self] in
-            self?.subtitle = nil
+            guard let self else { return }
+            subtitle = nil
+            harknessTurnEnded()
+        }
+        if config.mode.isHarkness {
+            harknessStats = HarknessStats()
+            playback.onStall = { [weak self] in
+                self?.beginStall()
+            }
         }
         playback.onInsight = { [weak self] turn in
             guard let self, let title = turn.insight else { return }
@@ -166,10 +206,153 @@ final class SessionController {
         }
     }
 
+    // MARK: - HarknessAI training mechanics
+
+    /// A student turn began: extend the conversation web, count talk time,
+    /// arm deflection tests, and light guideflow orbs.
+    private func harknessTurnStarted(_ turn: DirectorTurn) {
+        guard isHarkness, harknessStats != nil else { return }
+        currentTurnAudioStart = CACurrentMediaTime()
+        currentTurnSpeakerID = turn.speaker
+        harknessStats?.turnCounts[turn.speaker, default: 0] += 1
+
+        // Conversation web edge from whoever held the floor last.
+        if let last = lastSpeakerKey, last != turn.speaker {
+            harknessStats?.edges.append((from: last, to: turn.speaker))
+            let fromPos: SIMD3<Float> = last == "teacher"
+                ? SIMD3<Float>(0, 0, 0)
+                : (playback.character(for: last)?.seat.position ?? SIMD3<Float>(0, 0, 0))
+            let toPos = playback.character(for: turn.speaker)?.seat.position ?? SIMD3<Float>(0, 0, 0)
+            harknessOverlay?.addEdge(from: fromPos, to: toPos, involvesTeacher: last == "teacher")
+        }
+        lastSpeakerKey = turn.speaker
+
+        if turn.deflection == true {
+            pendingDeflection = (studentID: turn.speaker, at: .now)
+        }
+        if let node = turn.coveredNode, harknessStats?.nodesCovered.contains(node) == false {
+            harknessStats?.nodesCovered.insert(node)
+            harknessOverlay?.markNodeCovered(node)
+            let label = config.mode.harknessSetup?.realizationNodes.indices.contains(node - 1) == true
+                ? config.mode.harknessSetup!.realizationNodes[node - 1] : "node \(node)"
+            showFlash("Realization reached: \(label)", positive: true)
+            Task { [director] in await director.markNodeCovered(node) }
+            print("HARKNESS node \(node) covered")
+        }
+    }
+
+    private func harknessTurnEnded() {
+        guard isHarkness, let start = currentTurnAudioStart,
+              let speaker = currentTurnSpeakerID else { return }
+        harknessStats?.studentSeconds[speaker, default: 0] += CACurrentMediaTime() - start
+        currentTurnAudioStart = nil
+        currentTurnSpeakerID = nil
+    }
+
+    /// The room went dead quiet (a stall turn finished): start the tension bar.
+    private func beginStall() {
+        guard isHarkness else { return }
+        stallStartedAt = CACurrentMediaTime()
+        tensionProgress = 0
+        print("HARKNESS stall began — hold the silence")
+    }
+
+    /// The teacher outlasted the silence: reward, and a student steps up.
+    private func stallCompleted() {
+        stallStartedAt = nil
+        tensionProgress = nil
+        harknessStats?.silencesHeld += 1
+        showFlash("Silence held — a student steps up", positive: true)
+        print("HARKNESS silence held (\(harknessStats?.silencesHeld ?? 0))")
+        playback.resumeAfterStall(directive: """
+        The silence stretched until it became genuinely uncomfortable, and the teacher never rescued \
+        the class. One student finally cracks and takes ownership of the lull — prefer a quieter \
+        student (this is exactly when the Ghost might risk speaking). They restart the discussion \
+        with something real, not filler.
+        """)
+    }
+
+    /// The teacher spoke during a stall before the bar filled: the rescue is
+    /// scored when the transcript confirms it was a real utterance.
+    private func harknessTeacherSpoke(_ text: String) {
+        guard isHarkness else { return }
+        // Talk time (approximate: onset to final).
+        if let started = teacherSpeechStartedAt {
+            harknessStats?.teacherSeconds += max(CACurrentMediaTime() - started, 0.6)
+            teacherSpeechStartedAt = nil
+        }
+        // Rescue check: they spoke while the tension bar was still filling.
+        if stallStartedAt != nil, (tensionProgress ?? 0) < 1 {
+            harknessStats?.rescues += 1
+            showFlash("You rescued the silence", positive: false)
+            print("HARKNESS rescue (\(harknessStats?.rescues ?? 0))")
+        }
+        stallStartedAt = nil
+        tensionProgress = nil
+
+        // Web edge into the teacher.
+        if let last = lastSpeakerKey, last != "teacher" {
+            harknessStats?.edges.append((from: last, to: "teacher"))
+            let fromPos = playback.character(for: last)?.seat.position ?? SIMD3<Float>(0, 0, 0)
+            harknessOverlay?.addEdge(from: fromPos, to: SIMD3<Float>(0, 0, 0), involvesTeacher: true)
+        }
+        lastSpeakerKey = "teacher"
+
+        // Score the move in parallel — never blocks the class's reply.
+        let deflectionPending = pendingDeflection != nil
+            && Date.now.timeIntervalSince(pendingDeflection!.at) < 45
+        pendingDeflection = nil
+        Task { [weak self] in
+            do {
+                let move = try await OpenAIClient().classifyTeacherMove(
+                    text: text, pendingDeflection: deflectionPending)
+                await MainActor.run {
+                    guard let self else { return }
+                    let penalty = deflectionPending && move == .lecture
+                    self.harknessStats?.interventions.append(
+                        TeacherIntervention(text: text, move: move, wasLecturingPenalty: penalty))
+                    if penalty {
+                        self.harknessStats?.deflectionsFailed += 1
+                        self.showFlash("Lecturing Penalty — deflect it back next time", positive: false)
+                    } else if deflectionPending && move.isQuestionMove {
+                        self.harknessStats?.deflectionsPassed += 1
+                        self.showFlash("Deflected back to the table", positive: true)
+                    } else if move == .lecture {
+                        self.showFlash("Careful — that was a lecture", positive: false)
+                    } else if move == .textualTether {
+                        self.showFlash("Textual tether", positive: true)
+                    } else if move == .spotlight {
+                        self.showFlash("Spotlight", positive: true)
+                    }
+                    print("HARKNESS teacher move: \(move.rawValue)\(penalty ? " (PENALTY)" : "")")
+                }
+            } catch {
+                print("HARKNESS move classification failed: \(error)")
+            }
+        }
+    }
+
+    private func showFlash(_ text: String, positive: Bool) {
+        harknessFlash = HarknessFlash(id: UUID(), text: text, positive: positive)
+        flashClearTask?.cancel()
+        flashClearTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3.5))
+            guard !Task.isCancelled else { return }
+            self?.harknessFlash = nil
+        }
+    }
+
     /// Builds cast avatars into the scene and starts the conversation.
     func beginSession(handles: RoundtableSceneHandles) async {
         sceneHandles = handles
         startedAt = .now
+
+        // HarknessAI: guideflow orbs + conversation web overlay.
+        if let setup = config.mode.harknessSetup {
+            let overlay = HarknessOverlay(nodeCount: setup.realizationNodes.count)
+            handles.root.addChild(overlay.root)
+            harknessOverlay = overlay
+        }
 
         // Load avatars (replacing gray-box placeholders) and register them.
         for spec in config.cast {
@@ -234,6 +417,22 @@ final class SessionController {
             Task { [weak self] in
                 try? await Task.sleep(for: .seconds(25))
                 self?.changePage(delta: 1)
+            }
+        }
+        // -harknessTest: force stalls so the tension-meter loop (stall -> bar
+        // fills -> silence held -> a student steps up) is provable in the
+        // simulator. Re-arms until one lands: ambient mic pickup in the sim
+        // interrupts turns constantly, eating the flag before turnFinished.
+        if ProcessInfo.processInfo.arguments.contains("-harknessTest"), isHarkness {
+            Task { [weak self] in
+                for _ in 0..<6 {
+                    try? await Task.sleep(for: .seconds(40))
+                    guard let self else { return }
+                    if (harknessStats?.silencesHeld ?? 0) > 0 || (harknessStats?.rescues ?? 0) > 0 {
+                        return
+                    }
+                    playback.debugForceStallNextTurn = true
+                }
             }
         }
     }
@@ -348,7 +547,9 @@ final class SessionController {
                 }
             }
         }
-        if let doc = config.document {
+        if isHarkness {
+            playback.queueDirective("Class begins: the students have the text (\"\(config.document?.title ?? config.topic.title)\") in front of them; page 1 is on the board. The teacher hasn't spoken. One student (never the Ghost) opens with a first impression — authentic, a little tentative or a little too confident, true to their archetype.")
+        } else if let doc = config.document {
             playback.queueDirective("Session start: the moderator welcomes the table, introduces the uploaded document \"\(doc.title)\" — page 1 is up on the presentation board — and invites first impressions of the deck.")
         }
         playback.startGenerating()
@@ -363,6 +564,7 @@ final class SessionController {
             guard let self else { return }
             facedAtSpeechOnset = gaze.facedCharacterID
             userDidInterrupt = false
+            teacherSpeechStartedAt = CACurrentMediaTime()
             playback.duck()
             if groupActive, let coordinator {
                 coordinator.send(.userSpeechStarted(name: coordinator.localName))
@@ -398,6 +600,7 @@ final class SessionController {
             }
             print("SESSION user said: \(text) (facing \(facedAtSpeechOnset ?? "nobody"))")
             userDidInterrupt = true
+            harknessTeacherSpoke(text)
 
             if isReplicaSession {
                 // Replica: the HOST owns the director. Broadcast the final
@@ -488,12 +691,25 @@ final class SessionController {
             card.update(dt: Float(dt))
         }
 
+        // HarknessAI: fill the Silence Tension Meter during a stall.
+        if let stallStart = stallStartedAt {
+            let progress = min((CACurrentMediaTime() - stallStart) / tensionDuration, 1)
+            if tensionProgress != progress { tensionProgress = progress }
+            if progress >= 1 {
+                stallCompleted()
+            }
+        }
+
         // Moderator closing round at ~80% of the configured session length.
         if !isReplicaSession, !closingRoundTriggered, let started = startedAt,
            Date.now.timeIntervalSince(started) > Double(config.settings.sessionMinutes) * 60 * 0.8 {
             closingRoundTriggered = true
-            let moderator = config.moderator?.name ?? "The moderator"
-            playback.queueDirective("Closing round: \(moderator) notes the hour is nearly up and asks each character for one final thought, one at a time. After the last one, \(moderator) warmly asks the USER for theirs.")
+            if isHarkness {
+                playback.queueDirective("Class is nearly over. The next student notices the time and offers a genuine synthesis of where the class landed — in their own words, no teacher summary.")
+            } else {
+                let moderator = config.moderator?.name ?? "The moderator"
+                playback.queueDirective("Closing round: \(moderator) notes the hour is nearly up and asks each character for one final thought, one at a time. After the last one, \(moderator) warmly asks the USER for theirs.")
+            }
         }
 
         // A non-speaking character the user faces for >0.8 s glances back
@@ -747,11 +963,21 @@ final class SessionController {
 
     func buildRecap() -> SessionRecap {
         let minutes = startedAt.map { Int(Date.now.timeIntervalSince($0) / 60) } ?? 0
+        var debrief: HarknessDebrief?
+        if let setup = config.mode.harknessSetup, let stats = harknessStats {
+            debrief = HarknessDebrief(
+                stats: stats,
+                setup: setup,
+                studentNames: Dictionary(uniqueKeysWithValues: config.cast.map { ($0.id, $0.name) }),
+                ghostID: HarknessStudents.ghostID,
+                monopolizerID: HarknessStudents.monopolizerID)
+        }
         return SessionRecap(
             topicTitle: config.topic.title,
             insights: insights,
             transcript: transcript,
-            durationMinutes: max(minutes, insights.isEmpty && transcript.isEmpty ? 0 : 1)
+            durationMinutes: max(minutes, insights.isEmpty && transcript.isEmpty ? 0 : 1),
+            harknessDebrief: debrief
         )
     }
 
