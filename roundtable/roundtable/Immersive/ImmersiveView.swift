@@ -276,7 +276,9 @@ struct SessionHUDView: View {
                     Text(hudTitle)
                         .font(.system(.headline, design: .serif))
                         .lineLimit(1)
-                    Text(appModel.sessionController?.isHarkness == true
+                    Text(appModel.sessionController?.isTutorial == true
+                         ? "Goal: turn every sticky note on the table green — without lecturing."
+                         : appModel.sessionController?.isHarkness == true
                          ? "Guide with questions and silence — not answers."
                          : "Speak any time — or just look at someone.")
                         .font(.caption2)

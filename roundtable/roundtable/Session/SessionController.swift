@@ -92,6 +92,15 @@ final class SessionController {
     @ObservationIgnored var debugPinnedFocus: Int?
     /// Debug access for the tutorial runner (overlay is otherwise private).
     var harknessOverlayForDebug: HarknessOverlay? { harknessOverlay }
+    /// Tutorial: the teacher's confirmed utterances (catalyst matching, the
+    /// step-back silence) are handed to the script runner.
+    @ObservationIgnored var onTutorialTeacherSpeech: ((String) -> Void)?
+    /// Tutorial: direct line to the overlay for the script runner.
+    var tutorialOverlay: HarknessOverlay? { harknessOverlay }
+    /// Tutorial: start a stall directly (the step-back after the catalyst).
+    func tutorialBeginOpeningStall() {
+        beginStall()
+    }
     @ObservationIgnored private var harknessOverlay: HarknessOverlay?
     @ObservationIgnored private var stallStartedAt: Double?
     /// Seconds the teacher must hold a dead silence before it pays off
@@ -442,6 +451,9 @@ final class SessionController {
         // HarknessAI: guideflow orbs + conversation web overlay.
         if let setup = config.mode.harknessSetup {
             let overlay = HarknessOverlay(nodeCount: setup.realizationNodes.count)
+            if ProcessInfo.processInfo.arguments.contains("-tutorialTest") {
+                overlay.debugLiftNotes = true   // fixed sim camera can't look down
+            }
             handles.root.addChild(overlay.root)
             harknessOverlay = overlay
             // The crib sheet: node cards on the table in front of the
@@ -730,11 +742,13 @@ final class SessionController {
 
             if isTutorial {
                 // The tutorial's beats are scripted: the teacher's speech is
-                // scored (above) and shown, but never redirects the class.
+                // scored (above), shown, and handed to the script runner
+                // (catalyst choice) — but never redirects the class.
                 transcript.append(TranscriptLine(speakerName: "You", text: text, wasInterrupted: false))
                 if config.settings.subtitlesEnabled {
                     subtitle = Subtitle(speakerName: "You", text: text, tint: .white)
                 }
+                onTutorialTeacherSpeech?(text)
                 playback.resumeCurrent()
                 return
             }

@@ -36,6 +36,8 @@ final class HarknessOverlay {
     private let noteTilt: Float = 0.95   // ~54°: faces a seated eye looking down
     /// Debug: lift coaching panels into the fixed simulator camera's view.
     var debugRaisePanels = false
+    /// Debug: lift the post-it arc itself into the camera's view.
+    var debugLiftNotes = false
 
     // Inset ellipse on the tabletop where web endpoints land.
     private let edgeA = SeatingLayout.tableSemiX - 0.22
@@ -140,43 +142,105 @@ final class HarknessOverlay {
     /// Lays the condensed realization labels on the table in front of the
     /// teacher as small parchment strips. Only the teacher's side of the
     /// table — this is their private crib sheet, in easy glancing range.
+    /// Lays the realization cards on the table as POST-IT NOTES in a wide
+    /// horizontal arc at the teacher's edge. Spreading them in X (~22 cm
+    /// apart ≈ 15° at arm's length) is what makes head-gaze targeting
+    /// reliable — the old stacked column separated cards by only ~4°.
     func buildTeacherNotes(cards: [NodeCard]) async {
         noteCards = cards
         noteHit = Array(repeating: false, count: cards.count)
         noteCloseness = Array(repeating: 0, count: cards.count)
-        let stripW: Float = 0.42
-        let stripD: Float = 0.075
-        let gap: Float = 0.02
-        // Leaned back ~54° toward the seated teacher: a seated eye at ~1.3 m
-        // looking down at the strips ~0.8 m out hits them nearly face-on.
+        let side: Float = 0.15
+        let spacing: Float = 0.23
+        let arcWidth = spacing * Float(cards.count - 1)
+        // Hand-stuck feel: each note sits at a slightly different angle.
+        let jitterYaw: [Float] = [-0.07, 0.05, -0.04, 0.07, -0.05]
         let tilt = simd_quatf(angle: noteTilt, axis: [1, 0, 0])
         for (i, card) in cards.enumerated() {
-            let z: Float = -0.72 - Float(i) * (stripD * cos(noteTilt) + gap)
+            let x = -arcWidth / 2 + Float(i) * spacing
             let holder = Entity()
-            holder.position = [0, SeatingLayout.tableTopHeight + 0.033, z]
-            holder.orientation = tilt
+            // Slight curve so the outer notes follow the table edge.
+            let z: Float = -0.76 + 0.05 * (x * x) / 0.2
+            if debugLiftNotes {
+                holder.position = [x * 1.6, 1.15, -1.5]
+                holder.orientation = simd_quatf(angle: jitterYaw[i % jitterYaw.count], axis: [0, 1, 0])
+                    * simd_quatf(angle: 0.12, axis: [1, 0, 0])
+            } else {
+                holder.position = [x, SeatingLayout.tableTopHeight + 0.062, z]
+                holder.orientation = simd_quatf(angle: jitterYaw[i % jitterYaw.count], axis: [0, 1, 0]) * tilt
+            }
             root.addChild(holder)
             noteHolders.append(holder)
 
-            // Amber glow pad under the strip: pulses as the class closes in.
+            // Amber glow pad behind the note: pulses as the class closes in.
             var glowMat = UnlitMaterial()
             glowMat.color = .init(tint: UIColor(red: 1.0, green: 0.72, blue: 0.2, alpha: 1))
-            let glow = ModelEntity(mesh: .generatePlane(width: stripW + 0.024, depth: stripD + 0.016,
-                                                        cornerRadius: 0.012),
+            let glow = ModelEntity(mesh: .generatePlane(width: side + 0.03, depth: side + 0.03,
+                                                        cornerRadius: 0.015),
                                    materials: [glowMat])
             glow.position = [0, -0.0015, 0]
             glow.components.set(OpacityComponent(opacity: 0))
             holder.addChild(glow)
             noteGlows.append(glow)
 
-            let strip = ModelEntity(mesh: .generatePlane(width: stripW, depth: stripD,
-                                                         cornerRadius: 0.008),
-                                    materials: [await Self.noteMaterial(index: i + 1, label: card.label,
-                                                                        hit: false)])
-            strip.position = [0, 0.0005, 0]
-            holder.addChild(strip)
-            noteStrips.append(strip)
+            let note = ModelEntity(mesh: .generatePlane(width: side, depth: side,
+                                                        cornerRadius: 0.003),
+                                   materials: [await Self.noteMaterial(index: i + 1, label: card.label,
+                                                                       hit: false)])
+            note.position = [0, 0.0005, 0]
+            holder.addChild(note)
+            noteStrips.append(note)
         }
+    }
+
+    /// Intro flourish: each post-it flashes amber in turn ("these are your
+    /// targets"), then fades.
+    func sweepNotes() {
+        for (i, glow) in noteGlows.enumerated() {
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(380 * i))
+                glow.components.set(OpacityComponent(opacity: 0.85))
+                for step in 0..<16 {
+                    try? await Task.sleep(for: .milliseconds(55))
+                    glow.components.set(OpacityComponent(opacity: 0.85 * (1 - Float(step) / 15)))
+                }
+                glow.components.set(OpacityComponent(opacity: 0))
+            }
+        }
+    }
+
+    // MARK: - Catalyst board (tutorial: the teacher launches the discussion)
+
+    private var catalystPanel: Entity?
+
+    /// Floats the catalyst options in front of the teacher: read one aloud
+    /// (or improvise) to launch the discussion.
+    func showCatalyst(options: [String]) {
+        hideCatalyst()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let renderer = ImageRenderer(content: CatalystBoardView(options: options))
+            renderer.scale = 2
+            var material = UnlitMaterial()
+            if let cg = renderer.cgImage,
+               let texture = try? await TextureResource(image: cg, options: .init(semantic: .color)) {
+                material.color = .init(texture: .init(texture))
+            } else {
+                material.color = .init(tint: UIColor(white: 0.1, alpha: 0.95))
+            }
+            let panel = ModelEntity(mesh: .generatePlane(width: 0.78, height: 0.78 * 0.62,
+                                                         cornerRadius: 0.015),
+                                    materials: [material])
+            panel.position = [0, 1.32, -1.5]
+            panel.orientation = simd_quatf(angle: 0.08, axis: [1, 0, 0])
+            root.addChild(panel)
+            catalystPanel = panel
+        }
+    }
+
+    func hideCatalyst() {
+        catalystPanel?.removeFromParent()
+        catalystPanel = nil
     }
 
     /// World positions of the card strips (gaze targets for focus).
@@ -209,13 +273,16 @@ final class HarknessOverlay {
             Task { @MainActor [weak self] in
                 guard let self, noteCards.indices.contains(slot) else { return }
                 let panel = await Self.makeDetailPanel(index: slot + 1, card: noteCards[slot])
-                // Floats above the crib sheet, same lean, centered on the row.
+                // Unfolds just above ITS post-it (pulled toward center so the
+                // outer notes' panels stay on the table).
                 if debugRaisePanels {
                     panel.position = [0, 1.45, -1.7]
                     panel.orientation = simd_quatf(angle: 0.1, axis: [1, 0, 0])
                 } else {
-                    panel.position = [0, SeatingLayout.tableTopHeight + 0.26, -0.86]
-                    panel.orientation = simd_quatf(angle: 0.55, axis: [1, 0, 0])
+                    let noteX = noteHolders.indices.contains(slot)
+                        ? noteHolders[slot].position.x : 0
+                    panel.position = [noteX * 0.65, SeatingLayout.tableTopHeight + 0.30, -0.97]
+                    panel.orientation = simd_quatf(angle: 0.5, axis: [1, 0, 0])
                 }
                 root.addChild(panel)
                 detailPanels[slot] = panel
@@ -324,48 +391,96 @@ final class HarknessOverlay {
     }
 }
 
-/// One crib-note strip: "3 · The LOI isn't revenue", struck through in green
-/// once the class lands it. Rendered big and high-contrast — it's read at
-/// arm's length on a tilted table stand.
+/// One post-it on the table: a square sticky note with a hand-written
+/// realization label. Goes green with a strikethrough and a check once the
+/// class lands it.
 private struct NoteStripView: View {
     let index: Int
     let label: String
     let hit: Bool
 
     var body: some View {
-        HStack(spacing: 14) {
-            Text("\(index)")
-                .font(.system(size: 34, weight: .heavy, design: .serif))
-                .foregroundStyle(hit ? Color.green : Color(red: 0.42, green: 0.27, blue: 0.1))
-                .frame(width: 40)
+        VStack(spacing: 6) {
+            HStack {
+                Text("\(index)")
+                    .font(.custom("Noteworthy-Bold", size: 42))
+                    .foregroundStyle(hit ? Color.green : Color(red: 0.5, green: 0.33, blue: 0.08))
+                Spacer()
+                if hit {
+                    Image(systemName: "checkmark.seal.fill")
+                        .font(.system(size: 38))
+                        .foregroundStyle(.green)
+                } else {
+                    Image(systemName: "eye")
+                        .font(.system(size: 24))
+                        .foregroundStyle(Color(red: 0.55, green: 0.42, blue: 0.1).opacity(0.55))
+                }
+            }
+            Spacer(minLength: 0)
             Text(label)
-                .font(.system(size: 31, weight: .bold, design: .serif))
+                .font(.custom("Noteworthy-Bold", size: 44))
                 .strikethrough(hit, color: .green)
-                .foregroundStyle(hit ? Color(white: 0.38) : Color(red: 0.12, green: 0.07, blue: 0.02))
-                .lineLimit(2)
+                .foregroundStyle(hit ? Color(white: 0.4) : Color(red: 0.13, green: 0.09, blue: 0.02))
+                .multilineTextAlignment(.center)
+                .lineLimit(4)
                 .minimumScaleFactor(0.5)
             Spacer(minLength: 0)
-            if hit {
-                Image(systemName: "checkmark.seal.fill")
-                    .font(.system(size: 30))
-                    .foregroundStyle(.green)
-            } else {
-                Image(systemName: "eye")
-                    .font(.system(size: 18))
-                    .foregroundStyle(Color(red: 0.55, green: 0.42, blue: 0.24).opacity(0.7))
-            }
         }
-        .padding(.horizontal, 18)
-        .frame(width: 560, height: 100)
+        .padding(18)
+        .frame(width: 340, height: 340)
         .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(hit ? Color(red: 0.87, green: 0.95, blue: 0.85)
-                          : Color(red: 0.97, green: 0.93, blue: 0.82))
+            ZStack(alignment: .top) {
+                // Classic sticky-note yellow (greened once hit) with a
+                // slightly darker adhesive strip along the top edge.
+                Rectangle()
+                    .fill(hit ? Color(red: 0.8, green: 0.93, blue: 0.75)
+                              : Color(red: 1.0, green: 0.95, blue: 0.55))
+                Rectangle()
+                    .fill(Color.black.opacity(0.07))
+                    .frame(height: 34)
+            }
+        )
+    }
+}
+
+/// The floating catalyst board: three ways to launch the discussion, read
+/// aloud in the teacher's own voice (or improvised).
+private struct CatalystBoardView: View {
+    let options: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("LAUNCH THE DISCUSSION")
+                .font(.system(size: 15, weight: .bold))
+                .kerning(3)
+                .foregroundStyle(Color(red: 0.95, green: 0.78, blue: 0.4))
+            Text("Read ONE aloud, in your own voice — or ask your own version.")
+                .font(.system(size: 21, weight: .semibold, design: .serif))
+                .foregroundStyle(Color(red: 0.96, green: 0.91, blue: 0.8))
+            ForEach(Array(options.enumerated()), id: \.offset) { i, option in
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text("\(i + 1)")
+                        .font(.system(size: 22, weight: .heavy, design: .serif))
+                        .foregroundStyle(Color(red: 0.45, green: 0.75, blue: 0.85))
+                    Text("“\(option)”")
+                        .font(.system(size: 22, weight: .semibold, design: .serif))
+                        .foregroundStyle(.white)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Text("…then lean back, look at your notes, and say nothing.")
+                .font(.system(size: 18, weight: .regular, design: .serif).italic())
+                .foregroundStyle(Color(red: 0.7, green: 0.62, blue: 0.48))
+        }
+        .padding(26)
+        .frame(width: 820, height: 508, alignment: .topLeading)
+        .background(
+            RoundedRectangle(cornerRadius: 18)
+                .fill(Color(red: 0.11, green: 0.07, blue: 0.03).opacity(0.97))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(hit ? Color.green.opacity(0.6) : Color(red: 0.55, green: 0.42, blue: 0.24),
-                              lineWidth: 3)
+            RoundedRectangle(cornerRadius: 18)
+                .strokeBorder(Color(red: 0.95, green: 0.78, blue: 0.4).opacity(0.7), lineWidth: 2)
         )
     }
 }
