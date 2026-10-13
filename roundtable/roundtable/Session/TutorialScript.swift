@@ -17,6 +17,8 @@ import SwiftUI
 enum TutorialBeat {
     case narrator(String)
     case student(DirectorTurn)
+    /// Flip the class text on the presentation board to this page (1-based).
+    case page(Int)
     /// Direct closeness pulse on a crib card (1-based node).
     case closeness(Int, Double)
     /// Demonstrates a passed deflection (+30) on the teacher's behalf.
@@ -27,26 +29,29 @@ enum TutorialBeat {
 }
 
 enum TutorialScript {
-    static let topicTitle = "Why did Rome fall?"
+    static let topicTitle = "The Story of an Hour"
+    /// Bundled 4-page class text (Kate Chopin, 1894 — public domain),
+    /// typeset by tools/make_story_pdf.py; one analytic beat per page.
+    static let documentResource = "StoryOfAnHour"
 
     static let setup = HarknessSetup(
         realizationNodes: [
-            "Rome's fall took centuries, not a day",
-            "Internal decay beat the barbarians to it",
-            "The East lived on for a thousand years",
+            "The open window turns the story's tone",
+            "Louise's change is written in her body first",
+            "The last line was planted in the first",
         ],
         studentCount: 5,
         isTutorial: true,
         presetCards: [
-            NodeCard(label: "Centuries of decline, not one day",
-                     coaching: ["Ask: what year did Rome 'fall' — why that one?",
-                                "Ask: what was already broken by 400 AD?"]),
-            NodeCard(label: "Internal decay beat the barbarians",
-                     coaching: ["Ask: who was paying Rome's armies by then?",
-                                "Tether: where do the sources blame Romans themselves?"]),
-            NodeCard(label: "The East lasted 1,000 more years",
-                     coaching: ["Ask: what happened in Constantinople in 476?",
-                                "Spotlight a quiet reader on the Byzantines."]),
+            NodeCard(label: "The window turns the tone",
+                     coaching: ["Ask: what does Louise see from the chair?",
+                                "Ask: where exactly does the grief scene turn?"]),
+            NodeCard(label: "Change hits the body first",
+                     coaching: ["Ask: what do her pulses and blood do?",
+                                "Tether: find the change before she says 'free'."]),
+            NodeCard(label: "Line one loads the last line",
+                     coaching: ["Ask: reread line one — why open with her heart?",
+                                "Ask: the doctors misread her death. Why can't we?"]),
         ])
 
     static let castIDs = ["jayden", "june", "tyler", "maddie", "wren"]
@@ -66,43 +71,62 @@ enum TutorialScript {
     }
 
     static let beats: [TutorialBeat] = [
-        .narrator("Welcome to HarknessAI. Tonight: why did Rome fall? Your class does the thinking — you steer only with questions and silence. Your crib notes are on the table."),
+        .narrator("Welcome to HarknessAI. Today your class reads Kate Chopin's Story of an Hour — a thousand words that teach more craft than most novels. Page one is on the board; your crib notes are on the table. Steer only with questions and silence."),
 
         .student(turn("jayden",
-                      "Okay so basically Rome fell in four seventy-six when the barbarians showed up. One bad day, empire over.",
-                      emotion: .passionate, closestNode: 1, closeness: 0.45)),
-
-        .narrator("That's the Monopolizer. Watch your notes — a card pulses as the class gets close."),
-
-        .closeness(1, 0.85),
+                      "Okay so page one: husband dies in a train crash, wife cries, goes to her room. Standard sad opening, honestly.",
+                      emotion: .passionate, closestNode: 3, closeness: 0.3)),
 
         .student(turn("june",
-                      "Except the empire was crumbling for two centuries before that, Jayden — inflation, plagues, civil wars. There was barely anything left to fall.",
-                      emotion: .skeptical, coveredNode: 1)),
+                      "Except look at the very first line — Chopin gives us the heart trouble before she gives us the husband. Writers don't open with a diagnosis by accident.",
+                      emotion: .thoughtful, closestNode: 3, closeness: 0.5)),
 
-        .narrator("June landed realization one herself — one hundred points, and you never spoke."),
+        .narrator("They're already reading like writers. Turn the page — and watch your notes."),
+
+        .page(2),
+        .closeness(1, 0.85),
+
+        .student(turn("jayden",
+                      "Wait, page two is all sparrows and spring and patches of blue sky? Her husband just died. This feels like the wrong weather.",
+                      emotion: .surprised, closestNode: 1, closeness: 0.9)),
+
+        .student(turn("june",
+                      "That's the move, Jayden. She sits down in grief, and everything through that open window is new spring life. The window flips the story's tone before Louise herself feels anything.",
+                      emotion: .passionate, coveredNode: 1)),
+
+        .narrator("Realization one — the setting turns the tone before the character does. A hundred points, and you never spoke."),
+
+        .page(3),
 
         .student(turn("tyler",
-                      "Wait, I heard Rome actually fell because of lead in the water pipes. That's true, right, teacher?",
+                      "Okay but 'free, body and soul free' — she's celebrating his death? So she's the villain, right, teacher?",
                       look: "user", emotion: .surprised, deflection: true)),
 
-        .narrator("A trap. Answer and you're lecturing. Deflect — ask the table. Like this —"),
+        .narrator("A trap. Answer it and you're lecturing. Hand it back — like this —"),
 
         .passDeflectionDemo,
 
         .student(turn("maddie",
-                      "Yeah and like, the pipes thing is kind of what June said, right? Poisoned from the inside.",
+                      "Yeah it's like June said with the window thing — she's sort of springtime inside now? If that makes sense.",
                       emotion: .thoughtful, stallAfter: true)),
 
-        .narrator("Silence. Don't rescue them. Let the bar fill."),
+        .narrator("Silence. Don't rescue them."),
 
         .awaitStall,
 
         .student(turn("wren",
-                      "…The eastern half didn't fall at all. Constantinople lasted another thousand years. Maybe the real question is why half of Rome didn't fall.",
-                      emotion: .thoughtful, coveredNode: 3)),
+                      "…She never says she's changed. Her body says it — her pulses beat fast, the blood warms and relaxes every inch of her. Chopin writes the transformation into the body before Louise can even name it.",
+                      emotion: .thoughtful, coveredNode: 2)),
 
-        .narrator("Your silence drew out the Ghost — realization three. One card remains — look at it to see how to question them there. Your debrief is waiting."),
+        .narrator("Your silence drew out the Ghost — realization two: write the change into the body before the mind. Last page."),
+
+        .page(4),
+
+        .student(turn("jayden",
+                      "And then the husband just walks in with his umbrella, and the doctors say joy killed her. Ironic, I guess?",
+                      emotion: .skeptical, closestNode: 3, closeness: 0.9)),
+
+        .narrator("One question away from realization three. Look at that card to see how to ask it — in a real class, the landing is yours. Your debrief is waiting."),
     ]
 }
 
@@ -172,6 +196,10 @@ extension SessionController {
                     }
                     try? await Task.sleep(for: .milliseconds(150))
 
+                case .page(let number):
+                    applyRemotePage(index: number - 1)
+                    try? await Task.sleep(for: .seconds(1.6))   // the glance beat
+
                 case .closeness(let node, let value):
                     applyTutorialCloseness(node: node, value: value)
 
@@ -197,7 +225,7 @@ extension SessionController {
             // can prove the gaze-expand path.
             if ProcessInfo.processInfo.arguments.contains("-tutorialTest") {
                 harknessOverlayForDebug?.debugRaisePanels = true
-                debugPinnedFocus = 1
+                debugPinnedFocus = 2   // the open node-3 card: the handoff
             }
         }
     }

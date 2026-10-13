@@ -313,9 +313,9 @@ struct MenuView: View {
                     .font(.title3)
                     .foregroundStyle(.green)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("New here? Play the 90-second tutorial")
+                    Text("New here? Play the guided tutorial")
                         .font(.headline)
-                    Text("A scripted class on the fall of Rome walks you through every mechanic: the crib cards, the pulse, a deflection trap, and one glorious silence.")
+                    Text("A two-minute close reading of Kate Chopin's \"The Story of an Hour\": your class pages through the actual text analyzing tone, character change, and plant-and-payoff — while you learn the crib cards, the pulse, a deflection trap, and one glorious silence.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -662,15 +662,24 @@ struct MenuView: View {
         }
     }
 
-    /// The scripted 90-second HarknessAI tutorial (no PDF, canned beats).
+    /// The scripted HarknessAI tutorial: a curated close-reading of Kate
+    /// Chopin's "The Story of an Hour" (bundled 4-page text on the board).
     private func enterTutorial() {
         guard appModel.phase == .menu, appModel.sessionController == nil else { return }
+        var storyDoc: DiscussionDocument?
+        if let url = Bundle.main.url(forResource: TutorialScript.documentResource,
+                                     withExtension: "pdf") {
+            storyDoc = DiscussionDocument(url: url)
+            storyDoc?.currentPageIndex = 0
+        } else {
+            print("TUTORIAL: \(TutorialScript.documentResource).pdf missing from bundle")
+        }
         let config = SessionConfig(topic: .custom(TutorialScript.topicTitle),
                                    cast: HarknessStudents.tutorialCast,
                                    settings: settings,
-                                   document: nil,
+                                   document: storyDoc?.info,
                                    mode: .harkness(TutorialScript.setup))
-        appModel.beginSession(config: config, document: nil)
+        appModel.beginSession(config: config, document: storyDoc)
         appModel.immersiveSpaceState = .inTransition
         enterError = nil
         Task {
