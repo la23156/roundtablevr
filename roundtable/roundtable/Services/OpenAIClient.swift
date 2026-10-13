@@ -115,36 +115,56 @@ struct OpenAIClient {
         return suggestion.nodes
     }
 
-    /// HarknessAI: condenses each realization node into a 3-6 word crib-note
-    /// label for the teacher's desk notes (glanceable mid-discussion).
-    func condenseNodes(_ nodes: [String]) async throws -> [String] {
+    /// HarknessAI: builds the teacher's crib cards — for each realization
+    /// node, a 3-6 word glanceable label plus 2-3 coaching questions that
+    /// steer students TOWARD the idea without giving it away (shown when the
+    /// teacher looks at the card).
+    func nodeCards(_ nodes: [String]) async throws -> [NodeCard] {
         let schema: [String: Any] = [
             "type": "object",
             "properties": [
-                "labels": ["type": "array", "items": ["type": "string"]],
+                "cards": [
+                    "type": "array",
+                    "items": [
+                        "type": "object",
+                        "properties": [
+                            "label": ["type": "string"],
+                            "coaching": ["type": "array", "items": ["type": "string"],
+                                         "minItems": 2, "maxItems": 3],
+                        ],
+                        "required": ["label", "coaching"],
+                        "additionalProperties": false,
+                    ],
+                ],
             ],
-            "required": ["labels"],
+            "required": ["cards"],
             "additionalProperties": false,
         ]
         let instructions = """
-        Condense each numbered realization into a 3-6 word crib-note label a teacher can read \
-        at a glance mid-discussion. Keep the load-bearing specifics (names, numbers), drop \
-        everything else. Return exactly one label per input, in order.
+        You prepare a Harkness teacher's crib cards. For each numbered realization the class should \
+        reach on their own, return: (1) label — a 3-6 word crib-note version keeping the load-bearing \
+        specifics; (2) coaching — 2-3 SHORT facilitator questions or moves (max ~10 words each) that \
+        would steer students toward the realization WITHOUT stating it ("Ask: where does the text say \
+        who profits?", "Spotlight a quiet reader on page 2"). Socratic, never the answer itself. \
+        Return exactly one card per input, in order.
         """
-        struct Condensed: Decodable { let labels: [String] }
+        struct Deck: Decodable {
+            struct Card: Decodable { let label: String; let coaching: [String] }
+            let cards: [Card]
+        }
         let numbered = nodes.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
-        let condensed: Condensed = try await structured(
+        let deck: Deck = try await structured(
             model: fastModel,
             fast: true,
             instructions: instructions,
             input: numbered,
-            schemaName: "node_labels",
+            schemaName: "node_cards",
             schema: schema
         )
-        guard condensed.labels.count == nodes.count else {
+        guard deck.cards.count == nodes.count else {
             throw ClientError.emptyOutput
         }
-        return condensed.labels
+        return deck.cards.map { NodeCard(label: $0.label, coaching: $0.coaching) }
     }
 
     /// HarknessAI: classifies one teacher utterance into a coaching move.

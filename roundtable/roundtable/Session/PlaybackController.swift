@@ -292,16 +292,17 @@ final class PlaybackController {
         lipSync.stop()
         gem.attach(to: nil)
         idleGazes()
-        guard !isReplica else { return }   // the host's turnStart drives replicas
         if currentTurnStalls {
             // HarknessAI: the room goes dead quiet. Nobody speaks until the
             // tension resolves (SessionController owns the timer) or the
-            // teacher breaks the silence (an ordinary interjection).
+            // teacher breaks the silence. Checked BEFORE the replica guard:
+            // the scripted tutorial feeds turns through the replica path.
             currentTurnStalls = false
             stalled = true
             onStall?()
             return
         }
+        guard !isReplica else { return }   // the host's turnStart drives replicas
         let gap = Double.random(in: 0.3...1.0) * config.settings.paceMultiplier
         playNextWhenReady(afterGap: gap)
     }

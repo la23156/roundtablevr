@@ -81,12 +81,22 @@ final class SessionController {
     private(set) var closingInOn: Int?
 
     var isHarkness: Bool { config.mode.isHarkness }
-    @ObservationIgnored private var nodeLabelsTask: Task<[String], Never>?
+    var isTutorial: Bool { config.mode.harknessSetup?.isTutorial == true }
+    @ObservationIgnored private var nodeCardsTask: Task<[NodeCard], Never>?
     @ObservationIgnored private var coachHintClearTask: Task<Void, Never>?
+    /// Gaze-on-crib-card focus (dwell + grace timers).
+    @ObservationIgnored private var noteFocusCandidate: (index: Int, since: Double)?
+    @ObservationIgnored private var noteFocusLostAt: Double?
+    /// Debug (-tutorialTest): pin a card's coaching panel open so the
+    /// simulator — which can't move its head — can screenshot it.
+    @ObservationIgnored var debugPinnedFocus: Int?
+    /// Debug access for the tutorial runner (overlay is otherwise private).
+    var harknessOverlayForDebug: HarknessOverlay? { harknessOverlay }
     @ObservationIgnored private var harknessOverlay: HarknessOverlay?
     @ObservationIgnored private var stallStartedAt: Double?
-    /// Seconds the teacher must hold a dead silence before it pays off.
-    @ObservationIgnored private let tensionDuration: Double = 10
+    /// Seconds the teacher must hold a dead silence before it pays off
+    /// (shortened in the tutorial so the beat lands inside 90 seconds).
+    @ObservationIgnored private var tensionDuration: Double = 10
     /// A student just asked the TEACHER directly; the teacher's next line is
     /// judged (deflect = pass, answer = Lecturing Penalty).
     @ObservationIgnored private var pendingDeflection: (studentID: String, at: Date)?
@@ -161,6 +171,12 @@ final class SessionController {
             harknessStats = HarknessStats()
             playback.onStall = { [weak self] in
                 self?.beginStall()
+            }
+            if config.mode.harknessSetup?.isTutorial == true {
+                // Scripted tutorial: turns are fed by the script runner, not
+                // the director LLM; the silence beat resolves in 6 s.
+                playback.setReplicaMode()
+                tensionDuration = 5
             }
         }
         playback.onInsight = { [weak self] turn in
@@ -367,12 +383,45 @@ final class SessionController {
         }
     }
 
-    /// Crib labels when the condensing LLM call fails: first ~6 words.
-    private static func fallbackLabels(for nodes: [String]) -> [String] {
+    /// Crib cards when the generating LLM call fails: truncated labels and
+    /// generic Socratic moves.
+    private static func fallbackCards(for nodes: [String]) -> [NodeCard] {
         nodes.map { node in
             let words = node.split(separator: " ")
-            return words.count <= 6 ? node : words.prefix(6).joined(separator: " ") + "…"
+            let label = words.count <= 6 ? node : words.prefix(6).joined(separator: " ") + "…"
+            return NodeCard(label: label, coaching: [
+                "Ask: where do you see that in the text?",
+                "Spotlight someone who hasn't spoken yet.",
+            ])
         }
+    }
+
+    // MARK: - Tutorial hooks (used by the script runner)
+
+    func setTutorSubtitle(_ text: String?) {
+        if let text {
+            // Into the transcript too: the echo guard compares mic pickups
+            // against recent lines, so the narrator can't be mistaken for
+            // the teacher speaking (and the tutor's words reach the recap).
+            transcript.append(TranscriptLine(speakerName: "Tutor", text: text, wasInterrupted: false))
+        }
+        guard config.settings.subtitlesEnabled || text == nil else { return }
+        subtitle = text.map { Subtitle(speakerName: "Tutor", text: $0, tint: .yellow) }
+    }
+
+    func applyTutorialCloseness(node: Int, value: Double) {
+        harknessOverlay?.setCloseness(node: node, closeness: value)
+        closingInOn = value >= 0.6 ? node : nil
+    }
+
+    func creditTutorialDeflection() {
+        pendingDeflection = nil
+        harknessStats?.deflectionsPassed += 1
+        harknessStats?.score += HarknessScore.deflectionPassed
+        harknessStats?.interventions.append(TeacherIntervention(
+            text: "I don't know — what does the table think?",
+            move: .redirect, wasLecturingPenalty: false))
+        showFlash("Deflected back to the table +\(HarknessScore.deflectionPassed)", positive: true)
     }
 
     private func showFlash(_ text: String, positive: Bool) {
@@ -395,13 +444,18 @@ final class SessionController {
             let overlay = HarknessOverlay(nodeCount: setup.realizationNodes.count)
             handles.root.addChild(overlay.root)
             harknessOverlay = overlay
-            // The crib sheet: condensed node labels on the table in front of
-            // the teacher (condensing kicked off in prefetchOpening).
+            // The crib sheet: node cards on the table in front of the
+            // teacher (generation kicked off in prefetchOpening).
             let nodes = setup.realizationNodes
             Task { @MainActor [weak self] in
-                let labels = await self?.nodeLabelsTask?.value ?? Self.fallbackLabels(for: nodes)
-                await self?.harknessOverlay?.buildTeacherNotes(labels: labels)
-                print("HARKNESS crib notes: \(labels.joined(separator: " | "))")
+                let cards = await self?.nodeCardsTask?.value ?? Self.fallbackCards(for: nodes)
+                await self?.harknessOverlay?.buildTeacherNotes(cards: cards)
+                print("HARKNESS crib notes: \(cards.map(\.label).joined(separator: " | "))")
+                // The scripted tutorial starts once the notes exist (it
+                // references them in its very first line).
+                if self?.isTutorial == true {
+                    self?.runTutorial()
+                }
             }
         }
 
@@ -606,11 +660,17 @@ final class SessionController {
             }
         }
         if let setup = config.mode.harknessSetup {
-            // Crib-note labels synthesize while the room loads.
+            // Crib cards (labels + coaching questions) synthesize while the
+            // room loads; the tutorial ships them pre-written.
             let nodes = setup.realizationNodes
-            nodeLabelsTask = Task {
-                (try? await OpenAIClient().condenseNodes(nodes)) ?? Self.fallbackLabels(for: nodes)
+            if let preset = setup.presetCards {
+                nodeCardsTask = Task { preset }
+            } else {
+                nodeCardsTask = Task {
+                    (try? await OpenAIClient().nodeCards(nodes)) ?? Self.fallbackCards(for: nodes)
+                }
             }
+            guard !setup.isTutorial else { return }   // scripted: no director
             playback.queueDirective("Class begins: the students have the text (\"\(config.document?.title ?? config.topic.title)\") in front of them; page 1 is on the board. The teacher hasn't spoken. One student (never the Ghost) opens with a first impression — authentic, a little tentative or a little too confident, true to their archetype.")
         } else if let doc = config.document {
             playback.queueDirective("Session start: the moderator welcomes the table, introduces the uploaded document \"\(doc.title)\" — page 1 is up on the presentation board — and invites first impressions of the deck.")
@@ -628,6 +688,9 @@ final class SessionController {
             facedAtSpeechOnset = gaze.facedCharacterID
             userDidInterrupt = false
             teacherSpeechStartedAt = CACurrentMediaTime()
+            // Tutorial: the beats are scripted and never pause for speech —
+            // the teacher's words are scored, not staged around.
+            guard !isTutorial else { return }
             playback.duck()
             if groupActive, let coordinator {
                 coordinator.send(.userSpeechStarted(name: coordinator.localName))
@@ -664,6 +727,17 @@ final class SessionController {
             print("SESSION user said: \(text) (facing \(facedAtSpeechOnset ?? "nobody"))")
             userDidInterrupt = true
             harknessTeacherSpoke(text)
+
+            if isTutorial {
+                // The tutorial's beats are scripted: the teacher's speech is
+                // scored (above) and shown, but never redirects the class.
+                transcript.append(TranscriptLine(speakerName: "You", text: text, wasInterrupted: false))
+                if config.settings.subtitlesEnabled {
+                    subtitle = Subtitle(speakerName: "You", text: text, tint: .white)
+                }
+                playback.resumeCurrent()
+                return
+            }
 
             if isReplicaSession {
                 // Replica: the HOST owns the director. Broadcast the final
@@ -756,6 +830,55 @@ final class SessionController {
 
         // HarknessAI: pulse the crib notes the class is closing in on.
         harknessOverlay?.update(time: time)
+
+        // Gaze on a crib card: dwell 0.35 s to expand its coaching panel,
+        // 0.8 s of looking away to collapse (so reading the panel — which
+        // floats above the cards — doesn't immediately dismiss it).
+        if let overlay = harknessOverlay {
+            if let pinned = debugPinnedFocus {
+                if overlay.focusedNote != pinned { overlay.setFocusedNote(pinned) }
+            } else {
+            let targets = overlay.noteFocusTargets
+            if !targets.isEmpty {
+                var best: (index: Int, angle: Float)?
+                let forward = normalize(gaze.headForward)
+                for (i, target) in targets.enumerated() {
+                    let dir = normalize(target - gaze.headPosition)
+                    let angle = acos(max(-1, min(1, dot(dir, forward))))
+                    if angle < 0.16, angle < (best?.angle ?? .infinity) {   // ~9°
+                        best = (i, angle)
+                    }
+                }
+                if let best {
+                    noteFocusLostAt = nil
+                    if noteFocusCandidate?.index != best.index {
+                        noteFocusCandidate = (best.index, time)
+                    } else if let candidate = noteFocusCandidate,
+                              time - candidate.since > 0.35,
+                              overlay.focusedNote != best.index {
+                        overlay.setFocusedNote(best.index)
+                    }
+                } else {
+                    noteFocusCandidate = nil
+                    if overlay.focusedNote != nil {
+                        // Reading the floating panel counts as still-focused.
+                        let panelPoint = SIMD3<Float>(0, SeatingLayout.tableTopHeight + 0.26, -0.86)
+                        let toPanel = normalize(panelPoint - gaze.headPosition)
+                        let panelAngle = acos(max(-1, min(1, dot(toPanel, forward))))
+                        if panelAngle < 0.22 {
+                            noteFocusLostAt = nil
+                        } else {
+                            if noteFocusLostAt == nil { noteFocusLostAt = time }
+                            if let lost = noteFocusLostAt, time - lost > 0.8 {
+                                overlay.setFocusedNote(nil)
+                                noteFocusLostAt = nil
+                            }
+                        }
+                    }
+                }
+            }
+            }
+        }
 
         // HarknessAI: fill the Silence Tension Meter during a stall.
         if let stallStart = stallStartedAt {

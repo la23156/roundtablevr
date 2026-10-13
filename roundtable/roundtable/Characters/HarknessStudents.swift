@@ -51,6 +51,11 @@ enum HarknessStudents {
         Array(all.prefix(max(3, min(count, all.count))))
     }
 
+    /// The five students of the scripted tutorial (one per archetype beat).
+    static var tutorialCast: [CharacterSpec] {
+        TutorialScript.castIDs.compactMap { id in all.first { $0.id == id } }
+    }
+
     static let all: [CharacterSpec] = [
         CharacterSpec(
             id: "jayden",

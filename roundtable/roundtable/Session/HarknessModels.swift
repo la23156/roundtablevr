@@ -33,6 +33,20 @@ struct HarknessSetup: Equatable {
     var realizationNodes: [String]
     /// How many AI students sit at the table (8 by default).
     var studentCount: Int = 8
+    /// The scripted 90-second tutorial (deterministic beats, no director LLM).
+    var isTutorial: Bool = false
+    /// Pre-written crib cards (tutorial); nil = generate via the fast LLM.
+    var presetCards: [NodeCard]?
+}
+
+/// One crib-sheet card: the glanceable label plus coaching guidance shown
+/// when the teacher looks at the card (how to QUESTION the class there).
+struct NodeCard: Equatable {
+    /// 3-6 word label on the table strip.
+    let label: String
+    /// 2-3 questions/moves that steer students toward this realization
+    /// without giving it away.
+    let coaching: [String]
 }
 
 /// Behavioral profile of an AI student. The flaws are the training obstacles.

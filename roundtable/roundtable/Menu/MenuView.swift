@@ -119,7 +119,9 @@ struct MenuView: View {
             if args.contains("-rtMessageTest") {
                 RTMessageSelfTest.run()
             }
-            if args.contains("-harknessTest") {
+            if args.contains("-tutorialTest") {
+                enterTutorial()
+            } else if args.contains("-harknessTest") {
                 runHarknessTest()
             } else if args.contains("-pdfTest") {
                 runPDFTest()
@@ -304,6 +306,32 @@ struct MenuView: View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Training Setup")
                 .font(.system(.title2, design: .serif).weight(.semibold))
+
+            // 0. The 90-second tutorial — no PDF needed.
+            HStack(spacing: 12) {
+                Image(systemName: "graduationcap.fill")
+                    .font(.title3)
+                    .foregroundStyle(.green)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("New here? Play the 90-second tutorial")
+                        .font(.headline)
+                    Text("A scripted class on the fall of Rome walks you through every mechanic: the crib cards, the pulse, a deflection trap, and one glorious silence.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    enterTutorial()
+                } label: {
+                    Label("Start tutorial", systemImage: "play.fill")
+                        .font(.callout.weight(.semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+                .disabled(appModel.phase != .menu || appModel.immersiveSpaceState != .closed)
+            }
+            .padding(14)
+            .background(RoundedRectangle(cornerRadius: 14).fill(Color.green.opacity(0.08)))
 
             // 1. The artifact.
             HStack(spacing: 12) {
@@ -630,6 +658,30 @@ struct MenuView: View {
                 Text(enterError)
                     .font(.footnote)
                     .foregroundStyle(.red)
+            }
+        }
+    }
+
+    /// The scripted 90-second HarknessAI tutorial (no PDF, canned beats).
+    private func enterTutorial() {
+        guard appModel.phase == .menu, appModel.sessionController == nil else { return }
+        let config = SessionConfig(topic: .custom(TutorialScript.topicTitle),
+                                   cast: HarknessStudents.tutorialCast,
+                                   settings: settings,
+                                   document: nil,
+                                   mode: .harkness(TutorialScript.setup))
+        appModel.beginSession(config: config, document: nil)
+        appModel.immersiveSpaceState = .inTransition
+        enterError = nil
+        Task {
+            switch await openImmersiveSpace(id: AppModel.immersiveSpaceID) {
+            case .opened:
+                dismissWindow(id: AppModel.mainWindowID)
+                dismissWindow(id: AppModel.castTableWindowID)
+            default:
+                appModel.immersiveSpaceState = .closed
+                appModel.sessionController = nil
+                appModel.phase = .menu
             }
         }
     }
