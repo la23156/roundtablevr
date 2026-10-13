@@ -89,12 +89,12 @@ export default function HarknessLanding() {
             questions, your gaze, and your patience.
           </p>
           <div className="splash-cta-row">
-            <a href="#how" className="splash-cta primary">
+            <Link href="/play" className="splash-cta primary">
+              ▶ Play the 3-minute demo
+            </Link>
+            <a href="#how" className="splash-cta">
               How it works
             </a>
-            <Link href="/table" className="splash-cta">
-              Try the web roundtable
-            </Link>
           </div>
         </div>
       </section>
@@ -161,6 +161,20 @@ export default function HarknessLanding() {
           </div>
         </article>
 
+      </section>
+
+      {/* Play it in the browser */}
+      <section className="splash-final" id="play">
+        <h2>Try the loop before you put on the headset.</h2>
+        <p className="splash-fine">
+          The full tutorial — Kate Chopin, five flawed students, the silence
+          meter, the sticky notes — playable in your browser in three minutes.
+        </p>
+        <p style={{ marginTop: "1rem" }}>
+          <Link href="/play" className="splash-cta primary">
+            ▶ Play the demo
+          </Link>
+        </p>
       </section>
 
       {/* Inside the simulator: real captures + live mechanics */}
