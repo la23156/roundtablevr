@@ -353,6 +353,11 @@ final class SessionController {
         }
         lastSpeakerKey = "teacher"
 
+        // Tutorial: scoring is deterministic (gates + chime), so the async
+        // classifier stays off — it would double-score and lets simulator
+        // mic bleed hand out phantom penalties.
+        guard !isTutorial else { return }
+
         // Score the move in parallel — never blocks the class's reply.
         let deflectionPending = pendingDeflection != nil
             && Date.now.timeIntervalSince(pendingDeflection!.at) < 45
@@ -421,6 +426,17 @@ final class SessionController {
     func applyTutorialCloseness(node: Int, value: Double) {
         harknessOverlay?.setCloseness(node: node, closeness: value)
         closingInOn = value >= 0.6 ? node : nil
+    }
+
+    /// Tutorial: HUD flash from the script runner (showFlash is private).
+    func showTutorialFlash(_ text: String, positive: Bool = true) {
+        showFlash(text, positive: positive)
+    }
+
+    /// Tutorial: gate rewards (stats setter is private).
+    func awardTutorialPoints(_ points: Int, flash: String) {
+        harknessStats?.score += points
+        showFlash(flash, positive: points >= 0)
     }
 
     func creditTutorialDeflection() {

@@ -193,6 +193,20 @@ final class HarknessOverlay {
         }
     }
 
+    /// Briefing flourish: flash ONE post-it amber while the Tutor names it.
+    func flashNote(_ index: Int) {
+        guard noteGlows.indices.contains(index - 1) else { return }
+        let glow = noteGlows[index - 1]
+        Task { @MainActor in
+            glow.components.set(OpacityComponent(opacity: 0.9))
+            for step in 0..<18 {
+                try? await Task.sleep(for: .milliseconds(70))
+                glow.components.set(OpacityComponent(opacity: 0.9 * (1 - Float(step) / 17)))
+            }
+            glow.components.set(OpacityComponent(opacity: 0))
+        }
+    }
+
     /// Intro flourish: each post-it flashes amber in turn ("these are your
     /// targets"), then fades.
     func sweepNotes() {
@@ -241,6 +255,40 @@ final class HarknessOverlay {
     func hideCatalyst() {
         catalystPanel?.removeFromParent()
         catalystPanel = nil
+    }
+
+    // MARK: - Guide board ("YOUR MOVE": say one of these to advance)
+
+    private var guidePanel: Entity?
+
+    /// Shows the teacher their move: suggested steering lines. The class
+    /// waits until they say one (or their own version).
+    func showGuide(title: String, options: [String]) {
+        hideGuide()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let renderer = ImageRenderer(content: GuideBoardView(title: title, options: options))
+            renderer.scale = 2
+            var material = UnlitMaterial()
+            if let cg = renderer.cgImage,
+               let texture = try? await TextureResource(image: cg, options: .init(semantic: .color)) {
+                material.color = .init(texture: .init(texture))
+            } else {
+                material.color = .init(tint: UIColor(white: 0.1, alpha: 0.95))
+            }
+            let panel = ModelEntity(mesh: .generatePlane(width: 0.62, height: 0.62 * 0.52,
+                                                         cornerRadius: 0.014),
+                                    materials: [material])
+            panel.position = [0, 1.22, -1.38]
+            panel.orientation = simd_quatf(angle: 0.1, axis: [1, 0, 0])
+            root.addChild(panel)
+            guidePanel = panel
+        }
+    }
+
+    func hideGuide() {
+        guidePanel?.removeFromParent()
+        guidePanel = nil
     }
 
     /// World positions of the card strips (gaze targets for focus).
@@ -439,6 +487,54 @@ private struct NoteStripView: View {
                     .fill(Color.black.opacity(0.07))
                     .frame(height: 34)
             }
+        )
+    }
+}
+
+/// The "YOUR MOVE" board: cyan-trimmed so it reads as the game asking the
+/// teacher to act. The class will not advance until they speak.
+private struct GuideBoardView: View {
+    let title: String
+    let options: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 16, weight: .bold))
+                Text("YOUR MOVE — SAY ONE ALOUD")
+                    .font(.system(size: 15, weight: .bold))
+                    .kerning(2.5)
+            }
+            .foregroundStyle(Color(red: 0.45, green: 0.8, blue: 0.9))
+            Text(title)
+                .font(.system(size: 20, weight: .semibold, design: .serif))
+                .foregroundStyle(Color(red: 0.96, green: 0.91, blue: 0.8))
+                .fixedSize(horizontal: false, vertical: true)
+            ForEach(Array(options.enumerated()), id: \.offset) { _, option in
+                HStack(alignment: .firstTextBaseline, spacing: 9) {
+                    Image(systemName: "quote.opening")
+                        .font(.system(size: 14))
+                        .foregroundStyle(Color(red: 0.45, green: 0.8, blue: 0.9))
+                    Text(option)
+                        .font(.system(size: 21, weight: .semibold, design: .serif))
+                        .foregroundStyle(.white)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Text("…or your own version. The class waits for you.")
+                .font(.system(size: 16, weight: .regular, design: .serif).italic())
+                .foregroundStyle(Color(red: 0.7, green: 0.62, blue: 0.48))
+        }
+        .padding(24)
+        .frame(width: 660, height: 344, alignment: .topLeading)
+        .background(
+            RoundedRectangle(cornerRadius: 18)
+                .fill(Color(red: 0.06, green: 0.1, blue: 0.12).opacity(0.97))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18)
+                .strokeBorder(Color(red: 0.45, green: 0.8, blue: 0.9).opacity(0.8), lineWidth: 2.5)
         )
     }
 }
