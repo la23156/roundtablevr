@@ -2050,6 +2050,19 @@ body:has(.game) .site-nav {
   color: var(--ink-dim);
 }
 
+.game-sound {
+  background: none;
+  border: 1px solid var(--wood-edge);
+  border-radius: 7px;
+  font-size: 0.95rem;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.game-sound:hover {
+  border-color: var(--amber);
+}
+
 .game-flash {
   margin-left: auto;
   font-weight: 700;

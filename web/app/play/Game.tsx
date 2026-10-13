@@ -52,7 +52,7 @@ export default function Game() {
   const [events, setEvents] = useState<GameEvent[]>([]);
   const [teacherWords, setTeacherWords] = useState(0);
   const [studentWords, setStudentWords] = useState(0);
-  const [voicesOn, setVoicesOn] = useState(false);
+  const [voicesOn, setVoicesOn] = useState(true);
   const [listening, setListening] = useState(false);
 
   const alive = useRef(true);
@@ -88,7 +88,9 @@ export default function Game() {
     });
   }, []);
 
-  // Optional spoken voices via the existing Deepgram proxy.
+  // Spoken voices via the existing Deepgram proxy. Clips play through the
+  // AudioContext unlocked by the start tap — `new Audio().play()` outside a
+  // gesture is blocked on iOS Safari, decoded buffers are not.
   const speakAloud = useCallback(async (text: string, voiceID: string) => {
     if (!voicesOnRef.current) return;
     try {
@@ -98,13 +100,29 @@ export default function Game() {
         body: JSON.stringify({ text, voiceID }),
       });
       if (!res.ok) return;
-      const url = URL.createObjectURL(await res.blob());
-      await new Promise<void>((resolve) => {
-        const a = new Audio(url);
-        a.onended = () => { URL.revokeObjectURL(url); resolve(); };
-        a.onerror = () => { URL.revokeObjectURL(url); resolve(); };
-        a.play().catch(() => resolve());
-      });
+      const bytes = await res.arrayBuffer();
+      const ctx = audioCtx.current;
+      if (ctx) {
+        if (ctx.state === "suspended") await ctx.resume();
+        const clip = await ctx.decodeAudioData(bytes.slice(0));
+        if (!voicesOnRef.current) return;   // muted while fetching
+        await new Promise<void>((resolve) => {
+          const src = ctx.createBufferSource();
+          src.buffer = clip;
+          src.connect(ctx.destination);
+          src.onended = () => resolve();
+          src.start();
+          setTimeout(resolve, (clip.duration + 1) * 1000);  // safety net
+        });
+      } else {
+        const url = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
+        await new Promise<void>((resolve) => {
+          const a = new Audio(url);
+          a.onended = () => { URL.revokeObjectURL(url); resolve(); };
+          a.onerror = () => { URL.revokeObjectURL(url); resolve(); };
+          a.play().catch(() => resolve());
+        });
+      }
     } catch { /* voices are a garnish — never block the game */ }
   }, []);
 
@@ -376,6 +394,10 @@ export default function Game() {
           <span className="game-hud-tension"><span style={{ width: `${tension * 100}%` }} /></span>
         )}
         <span className="game-talk">you: {Math.round(talkRatio * 100)}%</span>
+        <button className="game-sound" title="Student voices on/off"
+          onClick={() => setVoicesOn((v) => !v)}>
+          {voicesOn ? "🔊" : "🔇"}
+        </button>
         {flash && (
           <span key={flash.id} className={`game-flash ${flash.good ? "good" : "bad"}`}>
             {flash.text}
@@ -467,7 +489,7 @@ export default function Game() {
               <label className="game-voices-toggle">
                 <input type="checkbox" checked={voicesOn}
                   onChange={(e) => setVoicesOn(e.target.checked)} />
-                🔊 Student voices (speaks each line aloud)
+                🔊 Student voices — the class speaks its lines aloud (uncheck to read silently)
               </label>
               <button className="game-start" onClick={start}>Take your seat</button>
               <p className="game-title-fine">≈ 3 minutes · a free taste of the Vision&nbsp;Pro simulator</p>
